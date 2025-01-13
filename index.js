@@ -1,11 +1,14 @@
 const settings = require('./settings');
 const chalk = require('chalk');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const P = require('pino');
 const fs = require('fs');
 const path = require('path');
 const { handleMessages } = require('./main');
 const { generateSessionId, saveSession, loadSession } = require('./utils');
+const { exec } = require('child_process');
+const NodeCache = require('node-cache');
+const msgRetryCounterCache = new NodeCache();
 
 // Global settings
 global.packname = settings.packname;
@@ -13,7 +16,7 @@ global.author = settings.author;
 global.channelLink = "https://whatsapp.com/channel/0029Va90zAnIHphOuO8Msp3A";
 global.ytch = "Mr Unique Hacker";
 
-// Custom logger to filter unnecessary messages
+// Custom logger
 const logger = P({
     level: 'silent',
     enabled: false
@@ -35,150 +38,177 @@ let connectionState = {
     sessionExists: false,
     lastPing: Date.now(),
     sessionId: process.env.SESSION_ID || null,
-    isClosing: false
+    isClosing: false,
+    sock: null
 };
 
-async function startBot() {
+// Automatic reconnection function
+const startConnection = async () => {
     try {
-        // Use existing session if SESSION_ID is provided
-        if (process.env.SESSION_ID) {
-            printLog.info(`Using provided session ID: ${process.env.SESSION_ID}`);
-            const sessionData = await loadSession(process.env.SESSION_ID);
-            if (sessionData) {
-                connectionState.sessionExists = true;
-                connectionState.sessionId = process.env.SESSION_ID;
-            }
-        }
+        const { version } = await fetchLatestBaileysVersion();
+        printLog.info(`Using WA v${version.join('.')}, isLatest: ${version}`);
 
         const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
-        connectionState.sessionExists = state?.creds?.registered || false;
 
-        const sock = makeWASocket({
+        // Socket configuration
+        const config = {
             auth: state,
             printQRInTerminal: true,
             logger,
-            browser: ['KnightBot', 'Chrome', '1.0.0'],
+            browser: Browsers.macOS('Desktop'),
+            version,
             connectTimeoutMs: 60000,
             qrTimeout: 40000,
             defaultQueryTimeoutMs: 60000,
+            keepAliveIntervalMs: 10000,
+            emitOwnEvents: true,
             markOnlineOnConnect: true,
-            keepAliveIntervalMs: 30000,
-            retryRequestDelayMs: 2000,
-            emitOwnEvents: true
-        });
-
-        // Save credentials with session
-        sock.ev.on('creds.update', async (creds) => {
-            await saveCreds();
-            if (connectionState.sessionId) {
-                await saveSession(connectionState.sessionId, {
-                    creds,
-                    sessionInfo: {
-                        deviceId: sock.user?.id,
-                        platform: 'KnightBot',
-                        lastConnection: new Date().toISOString()
-                    }
-                });
-                printLog.success(`Session data saved for ID: ${connectionState.sessionId}`);
-            }
-        });
-
-        // Connection monitoring
-        const connectionMonitor = setInterval(async () => {
-            if (!connectionState.isConnected) return;
-            
-            try {
-                await sock.sendMessage(sock.user.id, { text: '' }, { ephemeral: true })
-                    .catch(() => {});
-                connectionState.lastPing = Date.now();
-            } catch (err) {
-                if (Date.now() - connectionState.lastPing > 30000) {
-                    printLog.warn('Connection check failed, attempting reconnect...');
-                    clearInterval(connectionMonitor);
-                    sock.end();
+            patchMessageBeforeSending: (message) => {
+                const requiresPatch = !!(
+                    message.buttonsMessage ||
+                    message.templateMessage ||
+                    message.listMessage
+                );
+                if (requiresPatch) {
+                    message = {
+                        viewOnceMessage: {
+                            message: {
+                                messageContextInfo: {
+                                    deviceListMetadataVersion: 2,
+                                    deviceListMetadata: {},
+                                },
+                                ...message,
+                            },
+                        },
+                    };
                 }
+                return message;
+            },
+            getMessage: async (key) => {
+                if (store) {
+                    const msg = await store.loadMessage(key.remoteJid, key.id);
+                    return msg?.message || undefined;
+                }
+                return {
+                    conversation: "An Error Occurred, Repeat Command!"
+                };
             }
-        }, 30000);
+        };
 
+        const sock = makeWASocket(config);
+        connectionState.sock = sock;
+
+        // Handle connection updates
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
 
-            if (qr && !connectionState.qrDisplayed && !connectionState.isConnected) {
-                connectionState.qrDisplayed = true;
-                printLog.info('Scan the QR code above to connect (Valid for 40 seconds)');
+            if (qr) {
+                if (!connectionState.qrDisplayed) {
+                    connectionState.qrDisplayed = true;
+                    printLog.info('Scan QR Code to connect');
+                }
+            }
+
+            if (connection === 'connecting') {
+                printLog.info('Connecting to WhatsApp...');
             }
 
             if (connection === 'close') {
-                clearInterval(connectionMonitor);
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const reason = lastDisconnect?.error?.output?.payload?.error;
-                printLog.error(`Connection closed: ${reason || 'Unknown reason'}`);
-
-                const shouldReconnect = (
-                    statusCode !== DisconnectReason.loggedOut &&
-                    statusCode !== DisconnectReason.badSession &&
-                    connectionState.retryCount < 3
-                );
-
+                const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+                printLog.warn(`Connection closed due to ${lastDisconnect?.error?.message}`);
+                
                 if (shouldReconnect) {
-                    connectionState.retryCount++;
-                    const delay = Math.min(connectionState.retryCount * 2000, 10000);
-                    printLog.warn(`Reconnecting in ${delay/1000}s... (Attempt ${connectionState.retryCount}/3)`);
-                    setTimeout(startBot, delay);
+                    printLog.info('Reconnecting...');
+                    setTimeout(startConnection, 3000);
                 } else {
-                    printLog.error('Connection terminated. Please restart the bot.');
-                    process.exit(1);
+                    printLog.error('Connection closed. You are logged out.');
+                    process.exit(0);
                 }
-            } else if (connection === 'open') {
+            }
+
+            if (connection === 'open') {
                 connectionState.isConnected = true;
                 connectionState.qrDisplayed = false;
-                connectionState.retryCount = 0;
-                connectionState.lastPing = Date.now();
+                printLog.success('Bot Connected Successfully!');
                 
-                // Generate session ID only after successful connection if not provided
+                // Generate or use existing session ID
                 if (!connectionState.sessionId) {
                     connectionState.sessionId = generateSessionId();
                 }
-                printLog.success('Successfully connected to WhatsApp!');
+                
                 printLog.success(`Session ID: ${connectionState.sessionId}`);
-                printLog.info('You can use this Session ID to deploy on Heroku/Hugging Face');
 
+                // Send connection message
                 try {
-                    const botNumber = sock.user.id;
-                    await sock.sendMessage(botNumber, {
-                        text: `🎉 Bot connected successfully!\nSession ID: ${connectionState.sessionId}`
+                    await sock.sendMessage(sock.user.id, {
+                        text: `🤖 *KnightBot Connected*\n\nSession ID: ${connectionState.sessionId}`
                     });
-                } catch (err) {
-                    // Silently handle confirmation message error
+                } catch (err) {}
+
+                // Keep connection alive
+                setInterval(async () => {
+                    try {
+                        await sock.sendPresenceUpdate('available');
+                    } catch (err) {}
+                }, 10000);
+            }
+        });
+
+        // Handle credentials update
+        sock.ev.on('creds.update', saveCreds);
+
+        // Handle messages
+        sock.ev.on('messages.upsert', async (messageUpdate) => {
+            if (connectionState.isConnected) {
+                try {
+                    await handleMessages(sock, messageUpdate);
+                } catch (error) {
+                    console.error('Error in message handler:', error);
                 }
             }
         });
 
-        // Forward messages to main.js for handling
-        sock.ev.on('messages.upsert', async (messageUpdate) => {
-            if (connectionState.isConnected) {
-                await handleMessages(sock, messageUpdate);
+        // Handle errors
+        sock.ev.on('error', async (error) => {
+            printLog.error('Connection error:', error);
+            if (!connectionState.isClosing) {
+                setTimeout(startConnection, 3000);
             }
         });
 
         // Handle graceful shutdown
         process.on('SIGINT', async () => {
             connectionState.isClosing = true;
-            printLog.warn('\nReceived Ctrl+C');
-            printLog.info('Bot will exit but keep session active');
-            printLog.info('Your session and authentication will be preserved');
-            clearInterval(connectionMonitor);
+            printLog.warn('Received shutdown signal');
+            printLog.info('Closing connection...');
+            if (connectionState.sock) {
+                await connectionState.sock.end();
+            }
             process.exit(0);
         });
 
+        // Handle uncaught errors
+        process.on('uncaughtException', (err) => {
+            printLog.error('Uncaught Exception:', err);
+            if (!connectionState.isClosing) {
+                setTimeout(startConnection, 3000);
+            }
+        });
+
+        process.on('unhandledRejection', (err) => {
+            printLog.error('Unhandled Rejection:', err);
+            if (!connectionState.isClosing) {
+                setTimeout(startConnection, 3000);
+            }
+        });
+
     } catch (err) {
-        printLog.error('Error in bot initialization:', err);
-        const delay = Math.min(1000 * Math.pow(2, connectionState.retryCount), 60000);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        connectionState.retryCount++;
-        startBot();
+        printLog.error('Fatal error:', err);
+        if (!connectionState.isClosing) {
+            setTimeout(startConnection, 3000);
+        }
     }
-}
+};
 
 // Start the bot
-startBot();
+startConnection();
