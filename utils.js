@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 
 // Session management
 function generateSessionId(prefix = 'KnightBot') {
@@ -46,33 +47,30 @@ async function decryptSession(encrypted) {
     }
 }
 
+const getSessionPath = (sessionId) => {
+    const tempDir = process.env.NODE_ENV === 'production' ? '/tmp' : os.tmpdir();
+    return path.join(tempDir, `${sessionId}.json`);
+};
+
 async function saveSession(sessionId, authData) {
     try {
-        const sessionsDir = path.join(__dirname, 'sessions');
-        if (!fs.existsSync(sessionsDir)) {
-            fs.mkdirSync(sessionsDir, { recursive: true });
+        const sessionPath = getSessionPath(sessionId);
+        // Don't create backup in production
+        if (process.env.NODE_ENV !== 'production') {
+            const backupPath = `${sessionPath}.backup`;
+            if (fs.existsSync(sessionPath)) {
+                fs.copyFileSync(sessionPath, backupPath);
+            }
         }
-
-        // Create backup of existing session if it exists
-        const sessionFile = path.join(sessionsDir, `${sessionId}.json`);
-        if (fs.existsSync(sessionFile)) {
-            const backupFile = path.join(sessionsDir, `${sessionId}.backup.json`);
-            fs.copyFileSync(sessionFile, backupFile);
-        }
-
+        
         // Encrypt and save new session
         const encrypted = await encryptSession(authData);
         if (!encrypted) throw new Error('Failed to encrypt session data');
-
-        // Write to temporary file first
-        const tempFile = path.join(sessionsDir, `${sessionId}.temp.json`);
-        fs.writeFileSync(tempFile, JSON.stringify(encrypted, null, 2));
-
-        // Rename temp file to actual file (atomic operation)
-        fs.renameSync(tempFile, sessionFile);
-
+        
+        fs.writeFileSync(sessionPath, JSON.stringify(encrypted, null, 2));
+        
         // Create creds file with metadata
-        const credsFile = path.join(sessionsDir, `${sessionId}.creds.json`);
+        const credsFile = `${sessionPath}.creds.json`;
         fs.writeFileSync(credsFile, JSON.stringify({
             id: sessionId,
             created: Date.now(),
@@ -90,23 +88,23 @@ async function saveSession(sessionId, authData) {
 
 async function loadSession(sessionId) {
     try {
-        const sessionFile = path.join(__dirname, 'sessions', `${sessionId}.json`);
-        const backupFile = path.join(__dirname, 'sessions', `${sessionId}.backup.json`);
+        const sessionPath = getSessionPath(sessionId);
+        const backupPath = `${sessionPath}.backup`;
 
         // Try loading main file first
-        if (fs.existsSync(sessionFile)) {
-            const encrypted = JSON.parse(fs.readFileSync(sessionFile));
+        if (fs.existsSync(sessionPath)) {
+            const encrypted = JSON.parse(fs.readFileSync(sessionPath));
             const decrypted = await decryptSession(encrypted);
             if (decrypted) return decrypted;
         }
 
         // If main file fails, try backup
-        if (fs.existsSync(backupFile)) {
-            const encrypted = JSON.parse(fs.readFileSync(backupFile));
+        if (fs.existsSync(backupPath)) {
+            const encrypted = JSON.parse(fs.readFileSync(backupPath));
             const decrypted = await decryptSession(encrypted);
             if (decrypted) {
                 // Restore backup to main file
-                fs.copyFileSync(backupFile, sessionFile);
+                fs.copyFileSync(backupPath, sessionPath);
                 return decrypted;
             }
         }
@@ -120,7 +118,8 @@ async function loadSession(sessionId) {
 
 function getSessionInfo(sessionId) {
     try {
-        const credsFile = path.join(__dirname, 'sessions', `${sessionId}.creds.json`);
+        const sessionPath = getSessionPath(sessionId);
+        const credsFile = `${sessionPath}.creds.json`;
         if (fs.existsSync(credsFile)) {
             return JSON.parse(fs.readFileSync(credsFile));
         }
