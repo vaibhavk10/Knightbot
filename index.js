@@ -34,11 +34,22 @@ let connectionState = {
     retryCount: 0,
     sessionExists: false,
     lastPing: Date.now(),
-    sessionId: null
+    sessionId: process.env.SESSION_ID || null,
+    isClosing: false
 };
 
 async function startBot() {
     try {
+        // Use existing session if SESSION_ID is provided
+        if (process.env.SESSION_ID) {
+            printLog.info(`Using provided session ID: ${process.env.SESSION_ID}`);
+            const sessionData = await loadSession(process.env.SESSION_ID);
+            if (sessionData) {
+                connectionState.sessionExists = true;
+                connectionState.sessionId = process.env.SESSION_ID;
+            }
+        }
+
         const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
         connectionState.sessionExists = state?.creds?.registered || false;
 
@@ -124,8 +135,10 @@ async function startBot() {
                 connectionState.retryCount = 0;
                 connectionState.lastPing = Date.now();
                 
-                // Generate session ID only after successful connection
-                connectionState.sessionId = generateSessionId();
+                // Generate session ID only after successful connection if not provided
+                if (!connectionState.sessionId) {
+                    connectionState.sessionId = generateSessionId();
+                }
                 printLog.success('Successfully connected to WhatsApp!');
                 printLog.success(`Session ID: ${connectionState.sessionId}`);
                 printLog.info('You can use this Session ID to deploy on Heroku/Hugging Face');
@@ -150,13 +163,11 @@ async function startBot() {
 
         // Handle graceful shutdown
         process.on('SIGINT', async () => {
-            printLog.warn('Shutting down bot gracefully...');
+            connectionState.isClosing = true;
+            printLog.warn('\nReceived Ctrl+C');
+            printLog.info('Bot will exit but keep session active');
+            printLog.info('Your session and authentication will be preserved');
             clearInterval(connectionMonitor);
-            try {
-                await sock.logout();
-            } catch (err) {
-                printLog.error('Error during logout');
-            }
             process.exit(0);
         });
 

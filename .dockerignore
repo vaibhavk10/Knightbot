@@ -1,6 +1,9 @@
 node_modules
-sessions
+npm-debug.log
 auth_info
-*.md
-.git
 .env
+.git
+.gitignore
+*.md
+sessions/
+temp/
