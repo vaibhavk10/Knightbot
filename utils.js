@@ -5,64 +5,39 @@ const os = require('os');
 
 // Session management
 function generateSessionId(prefix = 'KnightBot') {
-    const timestamp = Date.now().toString(36);
+    const timestamp = Date.now();
     const random = crypto.randomBytes(4).toString('hex');
-    return `${prefix}-${timestamp}-${random}`;
+    return `${prefix}-${random}-${timestamp}`;
 }
 
-async function encryptSession(data) {
-    try {
-        const key = crypto.randomBytes(32);
-        const iv = crypto.randomBytes(16);
-        const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-        
-        let encrypted = cipher.update(JSON.stringify(data));
-        encrypted = Buffer.concat([encrypted, cipher.final()]);
-        
-        return {
-            key: key.toString('hex'),
-            iv: iv.toString('hex'),
-            data: encrypted.toString('hex')
-        };
-    } catch (error) {
-        console.error('Encryption error:', error);
-        return null;
+// Get the proper temp directory path
+const getTempDir = () => {
+    if (process.env.NODE_ENV === 'production') {
+        const tempDir = '/tmp/knightbot';
+        if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+        }
+        return tempDir;
     }
-}
+    return path.join(os.tmpdir(), 'knightbot');
+};
 
-async function decryptSession(encrypted) {
-    try {
-        const key = Buffer.from(encrypted.key, 'hex');
-        const iv = Buffer.from(encrypted.iv, 'hex');
-        const encryptedData = Buffer.from(encrypted.data, 'hex');
-        
-        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-        let decrypted = decipher.update(encryptedData);
-        decrypted = Buffer.concat([decrypted, decipher.final()]);
-        
-        return JSON.parse(decrypted.toString());
-    } catch (error) {
-        console.error('Decryption error:', error);
-        return null;
-    }
-}
-
+// Get session file path
 const getSessionPath = (sessionId) => {
-    const tempDir = process.env.NODE_ENV === 'production' ? '/tmp' : os.tmpdir();
+    const tempDir = getTempDir();
     return path.join(tempDir, `${sessionId}.json`);
 };
 
 async function saveSession(sessionId, authData) {
     try {
         const sessionPath = getSessionPath(sessionId);
-        // Don't create backup in production
-        if (process.env.NODE_ENV !== 'production') {
-            const backupPath = `${sessionPath}.backup`;
-            if (fs.existsSync(sessionPath)) {
-                fs.copyFileSync(sessionPath, backupPath);
-            }
-        }
+        const tempDir = path.dirname(sessionPath);
         
+        // Ensure temp directory exists
+        if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+        }
+
         // Encrypt and save new session
         const encrypted = await encryptSession(authData);
         if (!encrypted) throw new Error('Failed to encrypt session data');
@@ -79,6 +54,7 @@ async function saveSession(sessionId, authData) {
             lastUpdate: Date.now()
         }, null, 2));
 
+        console.log(`Session saved to: ${sessionPath}`);
         return true;
     } catch (error) {
         console.error('Error saving session:', error);
@@ -89,26 +65,11 @@ async function saveSession(sessionId, authData) {
 async function loadSession(sessionId) {
     try {
         const sessionPath = getSessionPath(sessionId);
-        const backupPath = `${sessionPath}.backup`;
-
-        // Try loading main file first
         if (fs.existsSync(sessionPath)) {
             const encrypted = JSON.parse(fs.readFileSync(sessionPath));
             const decrypted = await decryptSession(encrypted);
             if (decrypted) return decrypted;
         }
-
-        // If main file fails, try backup
-        if (fs.existsSync(backupPath)) {
-            const encrypted = JSON.parse(fs.readFileSync(backupPath));
-            const decrypted = await decryptSession(encrypted);
-            if (decrypted) {
-                // Restore backup to main file
-                fs.copyFileSync(backupPath, sessionPath);
-                return decrypted;
-            }
-        }
-
         return null;
     } catch (error) {
         console.error('Error loading session:', error);
@@ -178,6 +139,43 @@ function saveUserGroupData(data) {
     } catch (error) {
         console.error('Error saving user group data:', error);
         return false;
+    }
+}
+
+async function encryptSession(data) {
+    try {
+        const key = crypto.randomBytes(32);
+        const iv = crypto.randomBytes(16);
+        const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+        
+        let encrypted = cipher.update(JSON.stringify(data));
+        encrypted = Buffer.concat([encrypted, cipher.final()]);
+        
+        return {
+            key: key.toString('hex'),
+            iv: iv.toString('hex'),
+            data: encrypted.toString('hex')
+        };
+    } catch (error) {
+        console.error('Encryption error:', error);
+        return null;
+    }
+}
+
+async function decryptSession(encrypted) {
+    try {
+        const key = Buffer.from(encrypted.key, 'hex');
+        const iv = Buffer.from(encrypted.iv, 'hex');
+        const encryptedData = Buffer.from(encrypted.data, 'hex');
+        
+        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+        let decrypted = decipher.update(encryptedData);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        
+        return JSON.parse(decrypted.toString());
+    } catch (error) {
+        console.error('Decryption error:', error);
+        return null;
     }
 }
 
