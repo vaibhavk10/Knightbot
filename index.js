@@ -1,6 +1,6 @@
 const settings = require('./settings');
 const chalk = require('chalk');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const P = require('pino');
 const fs = require('fs');
 const path = require('path');
@@ -8,7 +8,12 @@ const { handleMessages } = require('./main');
 const { generateSessionId, saveSession, loadSession } = require('./utils');
 const { exec } = require('child_process');
 const NodeCache = require('node-cache');
+const EventEmitter = require('events');
 const msgRetryCounterCache = new NodeCache();
+
+// Increase event listener limit
+EventEmitter.defaultMaxListeners = 2000;
+process.setMaxListeners(2000);
 
 // Global settings
 global.packname = settings.packname;
@@ -48,26 +53,42 @@ const startConnection = async () => {
         const { version } = await fetchLatestBaileysVersion();
         printLog.info(`Using WA v${version.join('.')}, isLatest: ${version}`);
 
-        const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+        const { state, saveCreds } = await useMultiFileAuthState('./session');
 
-        // Socket configuration
+        // Updated Socket configuration
         const config = {
-            auth: state,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger)
+            },
             printQRInTerminal: true,
             logger,
-            browser: Browsers.macOS('Desktop'),
+            browser: Browsers.windows('Desktop'),
             version,
-            connectTimeoutMs: 60000,
-            qrTimeout: 40000,
-            defaultQueryTimeoutMs: 60000,
-            keepAliveIntervalMs: 10000,
+            keepAliveIntervalMs: 5000,
+            syncFullHistory: true,
+            defaultQueryTimeoutMs: 30000,
+            retryRequestDelayMs: 5000,
+            markOnlineOnConnect: false,
+            fireInitQueries: true,
             emitOwnEvents: true,
-            markOnlineOnConnect: true,
+            generateHighQualityLinkPreview: true,
+            getMessage: async (key) => {
+                if (store) {
+                    const msg = await store.loadMessage(key.remoteJid, key.id);
+                    return msg?.message || undefined;
+                }
+                return {
+                    conversation: "An Error Occurred, Repeat Command!"
+                };
+            },
             patchMessageBeforeSending: (message) => {
                 const requiresPatch = !!(
                     message.buttonsMessage ||
                     message.templateMessage ||
-                    message.listMessage
+                    message.listMessage ||
+                    message.scheduledCallCreationMessage ||
+                    message.callLogMesssage
                 );
                 if (requiresPatch) {
                     message = {
@@ -83,15 +104,6 @@ const startConnection = async () => {
                     };
                 }
                 return message;
-            },
-            getMessage: async (key) => {
-                if (store) {
-                    const msg = await store.loadMessage(key.remoteJid, key.id);
-                    return msg?.message || undefined;
-                }
-                return {
-                    conversation: "An Error Occurred, Repeat Command!"
-                };
             }
         };
 
