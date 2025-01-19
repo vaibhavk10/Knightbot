@@ -16,20 +16,27 @@ async function helpCommand(sock, chatId, channelLink) {
 ╔═══════════════════╗
 🌐 *General Commands*:
 ║ ➤ .help or .menu
+║ ➤ .ping
+║ ➤ .alive
 ║ ➤ .tts <text>
-║ ➤ .sticker or .s
 ║ ➤ .owner
 ║ ➤ .joke
 ║ ➤ .quote
 ║ ➤ .fact
 ║ ➤ .weather <city>
 ║ ➤ .news
-║ ➤ .meme
-║ ➤ .simage
 ║ ➤ .attp <text>
 ║ ➤ .lyrics <song_title>
 ║ ➤ .8ball <question>
 ╚═══════════════════╝
+
+╔═══════════════════╗
+🎨 *Image Commands*:
+║ ➤ .blur <image>
+║ ➤ .simage <reply to sticker>
+║ ➤ .sticker <reply to image>
+║ ➤ .meme
+╚═══════════════════╝   
 
 ╔═══════════════════╗
 🛠️ *Admin Commands*:
@@ -49,9 +56,17 @@ async function helpCommand(sock, chatId, channelLink) {
 ╚═══════════════════╝
 
 ╔═══════════════════╗
+*Github Commands:*
+║ ➤ .git
+║ ➤ .github
+║ ➤ .sc
+║ ➤ .script
+║ ➤ .repo
+╚═══════════════════╝
+
+╔═══════════════════╗
 🎮 *Game Commands*:
 ║ ➤ .tictactoe @user
-║ ➤ .move <position>
 ║ ➤ .hangman
 ║ ➤ .guess <letter>
 ║ ➤ .trivia

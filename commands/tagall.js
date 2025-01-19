@@ -1,23 +1,17 @@
-const settings = require('../settings');
-
-async function isAdmin(sock, chatId, senderId) {
-    const groupMetadata = await sock.groupMetadata(chatId);
-    const participants = groupMetadata.participants;
-
-    // Check if the sender is an admin
-    const sender = participants.find(p => p.id === senderId);
-    const bot = participants.find(p => p.id === sock.user.id); // Check if the bot is an admin
-
-    const isSenderAdmin = sender && (sender.admin === 'admin' || sender.admin === 'superadmin');
-    const isBotAdmin = bot && (bot.admin === 'admin' || bot.admin === 'superadmin');
-
-    return { isSenderAdmin, isBotAdmin };
-}
+const isAdmin = require('../helpers/isAdmin');  // Move isAdmin to helpers
 
 async function tagAllCommand(sock, chatId, senderId) {
-    const { isSenderAdmin, isBotAdmin } = await isAdmin(sock, chatId, senderId);
+    try {
+        const { isSenderAdmin, isBotAdmin } = await isAdmin(sock, chatId, senderId);
+        
+        if (!isSenderAdmin && !isBotAdmin) {
+            await sock.sendMessage(chatId, {
+                text: 'Only admins can use the .tagall command.'
+            });
+            return;
+        }
 
-    if (isSenderAdmin || isBotAdmin) {
+        // Get group metadata
         const groupMetadata = await sock.groupMetadata(chatId);
         const participants = groupMetadata.participants;
 
@@ -26,23 +20,22 @@ async function tagAllCommand(sock, chatId, senderId) {
             return;
         }
 
-        let mentionText = 'Hey everyone! ';
-        let mentions = [];
-
+        // Create message with each member on a new line
+        let message = '🔊 *Group Members:*\n\n';
         participants.forEach(participant => {
-            mentionText += `@${participant.id.split('@')[0]} `;
-            mentions.push(participant.id);
+            message += `@${participant.id.split('@')[0]}\n`; // Add \n for new line
         });
 
+        // Send message with mentions
         await sock.sendMessage(chatId, {
-            text: mentionText,
-            mentions: mentions
+            text: message,
+            mentions: participants.map(p => p.id)
         });
-    } else {
-        await sock.sendMessage(chatId, {
-            text: 'Only admins or the bot (if it is an admin) can use the .tagall command.'
-        });
+
+    } catch (error) {
+        console.error('Error in tagall command:', error);
+        await sock.sendMessage(chatId, { text: 'Failed to tag all members.' });
     }
 }
 
-module.exports = tagAllCommand;
+module.exports = tagAllCommand;  // Export directly

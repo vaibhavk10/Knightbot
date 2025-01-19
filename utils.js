@@ -116,19 +116,19 @@ function loadCommands() {
 // Database operations
 const dataFile = path.join(__dirname, './data/userGroupData.json');
 
-function loadUserGroupData() {
+const loadUserGroupData = () => {
     try {
         if (fs.existsSync(dataFile)) {
             return JSON.parse(fs.readFileSync(dataFile, 'utf-8'));
         }
-        return { users: [], groups: [] };
+        return { users: [], groups: [], antilink: {} };
     } catch (error) {
         console.error('Error loading user group data:', error);
-        return { users: [], groups: [] };
+        return { users: [], groups: [], antilink: {} };
     }
-}
+};
 
-function saveUserGroupData(data) {
+const saveUserGroupData = (data) => {
     try {
         const dir = path.dirname(dataFile);
         if (!fs.existsSync(dir)) {
@@ -140,7 +140,7 @@ function saveUserGroupData(data) {
         console.error('Error saving user group data:', error);
         return false;
     }
-}
+};
 
 async function encryptSession(data) {
     try {

@@ -1,33 +1,18 @@
-const fs = require('fs');
-const path = require('path');
+const { handleWelcome } = require('../lib/welcome');
 
-async function welcomeNewMembers(sock, chatId, newMembers) {
-    let welcomeText = 'Welcome ';
-    newMembers.forEach((member) => {
-        welcomeText += `@${member.split('@')[0]} `;
-    });
-    welcomeText += 'to the group! 🎉';
-
-    // Send the welcome message
-    await sock.sendMessage(chatId, {
-        text: welcomeText,
-        mentions: newMembers
-    });
-
-    // Path to the sticker file
-    const stickerPath = path.join(__dirname, '../assets/stickintro.webp');
-
-    // Check if the sticker file exists
-    if (fs.existsSync(stickerPath)) {
-        const stickerBuffer = fs.readFileSync(stickerPath);
-
-        // Send the sticker
-        await sock.sendMessage(chatId, { 
-            sticker: stickerBuffer 
-        });
-    } else {
-        console.error('Sticker not found at:', stickerPath);
+async function welcomeCommand(sock, chatId, message, match) {
+    // Check if it's a group
+    if (!chatId.endsWith('@g.us')) {
+        await sock.sendMessage(chatId, { text: 'This command can only be used in groups.' });
+        return;
     }
+
+    // Extract match from message
+    const text = message.message?.conversation || 
+                message.message?.extendedTextMessage?.text || '';
+    const matchText = text.split(' ').slice(1).join(' ');
+
+    await handleWelcome(sock, chatId, message, matchText);
 }
 
-module.exports = welcomeNewMembers;
+module.exports = welcomeCommand;

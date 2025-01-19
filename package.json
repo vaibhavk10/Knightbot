@@ -18,7 +18,7 @@
     "@hapi/boom": "^10.0.1",
     "@types/node": "^18.0.6",
     "@whiskeysockets/baileys": "^6.7.9",
-    "axios": "^1.7.7",
+    "axios": "^1.6.7",
     "chalk": "^4.1.2",
     "dotenv": "^16.4.5",
     "events": "^3.3.0",
@@ -36,6 +36,8 @@
     "sharp": "^0.32.6",
     "tough-cookie": "^5.0.0",
     "ws": "^8.17.1",
-    "yargs-parser": "^21.1.1"
+    "yargs-parser": "^21.1.1",
+    "form-data": "^4.0.0",
+    "wa-sticker-formatter": "^4.4.4"
   }
 }

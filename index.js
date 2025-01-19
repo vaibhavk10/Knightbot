@@ -11,6 +11,7 @@ const NodeCache = require('node-cache');
 const EventEmitter = require('events');
 const msgRetryCounterCache = new NodeCache();
 const http = require('http');
+const { isWelcomeOn, isGoodByeOn } = require('./sql');
 
 // Increase event listener limit
 EventEmitter.defaultMaxListeners = 2000;
@@ -62,23 +63,11 @@ const checkSessionFiles = () => {
 };
 
 // Automatic reconnection function
-const startConnection = async () => {
+async function startConnection() {
     try {
-        // Log before auth state
-        printLog.info('Checking session directory...');
-        checkSessionFiles();
-
-        const { version } = await fetchLatestBaileysVersion();
-        printLog.info(`Using WA v${version.join('.')}, isLatest: ${version}`);
-
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-        
-        // Log after auth state
-        printLog.info('After auth state initialization...');
-        checkSessionFiles();
-
-        // Updated Socket configuration
-        const config = {
+        const { version } = await fetchLatestBaileysVersion();
+        const sock = makeWASocket({
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
@@ -127,12 +116,92 @@ const startConnection = async () => {
                 }
                 return message;
             }
-        };
+        });
 
-        const sock = makeWASocket(config);
         connectionState.sock = sock;
 
-        // Handle connection updates
+        // Register group participants event handler ONCE
+        sock.ev.on('group-participants.update', async (update) => {
+            try {
+                const { id, participants, action } = update;
+                
+                // Check if welcome/goodbye is enabled for this group
+                const isWelcomeEnabled = await isWelcomeOn(id);
+                const isGoodbyeEnabled = await isGoodByeOn(id);
+
+                if (action === 'add' && isWelcomeEnabled) {
+                    // Get participant names
+                    const participantNames = await Promise.all(participants.map(async (jid) => {
+                        try {
+                            const contact = await sock.contactQuery(jid);
+                            return {
+                                mention: `@${jid.split('@')[0]}`,
+                                name: contact.pushName || contact.notify || jid.split('@')[0]
+                            };
+                        } catch (err) {
+                            return {
+                                mention: `@${jid.split('@')[0]}`,
+                                name: jid.split('@')[0]
+                            };
+                        }
+                    }));
+
+                    // Create welcome message with names
+                    const welcomeText = `Welcome ${participantNames.map(p => p.name).join(', ')} to the group! 🎉`;
+
+                    await sock.sendMessage(id, {
+                        text: welcomeText,
+                        mentions: participants,
+                        contextInfo: {
+                            forwardingScore: 999,
+                            isForwarded: true,
+                            forwardedNewsletterMessageInfo: {
+                                newsletterJid: '120363161513685998@newsletter',
+                                newsletterName: 'KnightBot MD',
+                                serverMessageId: -1
+                            }
+                        }
+                    });
+                } else if (action === 'remove' && isGoodbyeEnabled) {
+                    // Get participant names for goodbye message
+                    const participantNames = await Promise.all(participants.map(async (jid) => {
+                        try {
+                            const contact = await sock.contactQuery(jid);
+                            return {
+                                mention: `@${jid.split('@')[0]}`,
+                                name: contact.pushName || contact.notify || jid.split('@')[0]
+                            };
+                        } catch (err) {
+                            return {
+                                mention: `@${jid.split('@')[0]}`,
+                                name: jid.split('@')[0]
+                            };
+                        }
+                    }));
+
+                    // Create goodbye message with names
+                    const goodbyeText = `Goodbye ${participantNames.map(p => p.name).join(', ')} 👋`;
+
+                    await sock.sendMessage(id, {
+                        text: goodbyeText,
+                        mentions: participants,
+                        contextInfo: {
+                            forwardingScore: 999,
+                            isForwarded: true,
+                            forwardedNewsletterMessageInfo: {
+                                newsletterJid: '120363161513685998@newsletter',
+                                newsletterName: 'KnightBot MD',
+                                serverMessageId: -1
+                            }
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Error in group-participants.update handler:', error);
+            }
+        });
+
+        // Connection update event handler
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
 
@@ -246,7 +315,7 @@ const startConnection = async () => {
             setTimeout(startConnection, 3000);
         }
     }
-};
+}
 
 // Start the bot
 startConnection();
