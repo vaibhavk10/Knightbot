@@ -68,24 +68,29 @@ const initializeAuthFiles = async () => {
             fs.mkdirSync(sessionPath, { recursive: true });
         }
         
+        // Check if we have a valid creds.json
         const credPath = path.join(sessionPath, 'creds.json');
         if (!fs.existsSync(credPath)) {
-            // Initialize empty creds if none exist
-            fs.writeFileSync(credPath, JSON.stringify({
-                noiseKey: null,
-                signedIdentityKey: null,
-                signedPreKey: null,
-                registrationId: null,
-                advSecretKey: null,
-                nextPreKeyId: 0,
-                firstUnuploadedPreKeyId: 0,
-                serverHasPreKeys: false,
-                account: null,
-                me: null,
-                signalIdentities: [],
-                lastAccountSyncTimestamp: 0,
-                myAppStateKeyId: null
-            }, null, 2));
+            printLog.error('No creds.json found! Please scan QR code first.');
+            process.exit(1);
+        }
+
+        // Create empty auth files if they don't exist
+        const authFiles = [
+            'app-state-sync-key-regular.json',
+            'app-state-sync-version-regular.json'
+        ];
+
+        for (let i = 0; i < 5; i++) {
+            authFiles.push(`pre-key-${i}.json`);
+            authFiles.push(`session-${i}.json`);
+        }
+
+        for (const file of authFiles) {
+            const filePath = path.join(sessionPath, file);
+            if (!fs.existsSync(filePath)) {
+                fs.writeFileSync(filePath, JSON.stringify({}));
+            }
         }
         
         printLog.info('Auth files initialized');
@@ -100,18 +105,21 @@ const startConnection = async () => {
     try {
         await initializeAuthFiles();
         
+        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+        
+        // Add this to ensure files are writable
+        fs.chmodSync(sessionPath, '777');
+        const files = fs.readdirSync(sessionPath);
+        for (const file of files) {
+            fs.chmodSync(path.join(sessionPath, file), '777');
+        }
+
         // Log before auth state
         printLog.info('Checking session directory...');
         checkSessionFiles();
         
         const { version } = await fetchLatestBaileysVersion();
         printLog.info(`Using WA v${version.join('.')}, isLatest: ${version}`);
-
-        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-        
-        // Log after auth state
-        printLog.info('After auth state initialization...');
-        checkSessionFiles();
 
         // Updated Socket configuration
         const config = {

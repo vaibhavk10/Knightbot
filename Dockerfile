@@ -22,7 +22,7 @@ COPY . .
 
 # Create session directory with full permissions
 RUN mkdir -p session && \
-    chmod 777 session
+    chmod -R 777 session
 
 # Start the bot
 CMD ["node", "index.js"]
