@@ -48,13 +48,34 @@ let connectionState = {
     sock: null
 };
 
+// Add this near your useMultiFileAuthState call
+const sessionPath = './session';
+
+// Add debug logging
+const checkSessionFiles = () => {
+    try {
+        const files = fs.readdirSync(sessionPath);
+        printLog.info('Current session files: ' + files.join(', '));
+    } catch (err) {
+        printLog.error('Error reading session directory:', err);
+    }
+};
+
 // Automatic reconnection function
 const startConnection = async () => {
     try {
+        // Log before auth state
+        printLog.info('Checking session directory...');
+        checkSessionFiles();
+
         const { version } = await fetchLatestBaileysVersion();
         printLog.info(`Using WA v${version.join('.')}, isLatest: ${version}`);
 
-        const { state, saveCreds } = await useMultiFileAuthState('./session');
+        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+        
+        // Log after auth state
+        printLog.info('After auth state initialization...');
+        checkSessionFiles();
 
         // Updated Socket configuration
         const config = {
@@ -167,8 +188,12 @@ const startConnection = async () => {
             }
         });
 
-        // Handle credentials update
-        sock.ev.on('creds.update', saveCreds);
+        // Add logging to creds.update
+        sock.ev.on('creds.update', async () => {
+            await saveCreds();
+            printLog.info('Credentials updated, checking files...');
+            checkSessionFiles();
+        });
 
         // Handle messages
         sock.ev.on('messages.upsert', async (messageUpdate) => {
