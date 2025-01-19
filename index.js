@@ -10,6 +10,7 @@ const { exec } = require('child_process');
 const NodeCache = require('node-cache');
 const EventEmitter = require('events');
 const msgRetryCounterCache = new NodeCache();
+const http = require('http');
 
 // Increase event listener limit
 EventEmitter.defaultMaxListeners = 2000;
@@ -224,3 +225,13 @@ const startConnection = async () => {
 
 // Start the bot
 startConnection();
+
+// Add this near the bottom of the file, before startConnection()
+const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('Bot is running!');
+});
+
+server.listen(7860, () => {
+    printLog.info('Health check server running on port 7860');
+});

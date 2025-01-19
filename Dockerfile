@@ -20,8 +20,11 @@ RUN npm install
 # Copy project files
 COPY . .
 
-# Create session directory
-RUN mkdir -p session
+# Create persistent storage directory
+RUN mkdir -p /data/session
+
+# Symlink session directory to persistent storage
+RUN rm -rf session && ln -s /data/session session
 
 # Start the bot
 CMD ["node", "index.js"]
