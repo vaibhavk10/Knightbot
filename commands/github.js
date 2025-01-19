@@ -5,7 +5,7 @@ async function githubCommand(sock, chatId) {
 https://github.com/mruniquehacker/Knightbot
 
 *📢 Official Channel:*
-https://youtube.com/@mruniquehacker
+https://youtube.com/@mr_unique_hacker
 
 _Star ⭐ the repository if you like the bot!_`;
 
