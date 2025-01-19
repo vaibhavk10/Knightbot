@@ -61,13 +61,49 @@ const checkSessionFiles = () => {
     }
 };
 
+// Add this function before startConnection
+const initializeAuthFiles = async () => {
+    try {
+        if (!fs.existsSync(sessionPath)) {
+            fs.mkdirSync(sessionPath, { recursive: true });
+        }
+        
+        const credPath = path.join(sessionPath, 'creds.json');
+        if (!fs.existsSync(credPath)) {
+            // Initialize empty creds if none exist
+            fs.writeFileSync(credPath, JSON.stringify({
+                noiseKey: null,
+                signedIdentityKey: null,
+                signedPreKey: null,
+                registrationId: null,
+                advSecretKey: null,
+                nextPreKeyId: 0,
+                firstUnuploadedPreKeyId: 0,
+                serverHasPreKeys: false,
+                account: null,
+                me: null,
+                signalIdentities: [],
+                lastAccountSyncTimestamp: 0,
+                myAppStateKeyId: null
+            }, null, 2));
+        }
+        
+        printLog.info('Auth files initialized');
+        checkSessionFiles();
+    } catch (err) {
+        printLog.error('Error initializing auth files:', err);
+    }
+};
+
 // Automatic reconnection function
 const startConnection = async () => {
     try {
+        await initializeAuthFiles();
+        
         // Log before auth state
         printLog.info('Checking session directory...');
         checkSessionFiles();
-
+        
         const { version } = await fetchLatestBaileysVersion();
         printLog.info(`Using WA v${version.join('.')}, isLatest: ${version}`);
 

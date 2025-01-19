@@ -20,18 +20,9 @@ RUN npm install
 # Copy project files
 COPY . .
 
-# Create persistent storage directory with proper permissions
-RUN mkdir -p /data/session && \
-    chmod 777 /data/session
-
-# Symlink session directory to persistent storage
-RUN rm -rf session && ln -s /data/session session
-
-# Ensure proper ownership
-RUN chown -R node:node /app /data/session
-
-# Switch to non-root user
-USER node
+# Create session directory with full permissions
+RUN mkdir -p session && \
+    chmod 777 session
 
 # Start the bot
 CMD ["node", "index.js"]
