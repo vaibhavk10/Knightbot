@@ -50,6 +50,7 @@ const { handleAntiBadwordCommand, handleBadwordDetection } = require('./lib/anti
 const antibadwordCommand = require('./commands/antibadword');
 const { handleChatbotCommand, handleChatbotResponse } = require('./commands/chatbot');
 const takeCommand = require('./commands/take');
+const flirtCommand = require('./commands/flirt');
 
 // Global settings
 global.packname = settings.packname;
@@ -404,6 +405,17 @@ async function handleMessages(sock, messageUpdate, printLog) {
             case userMessage.startsWith('.take'):
                 const takeArgs = userMessage.slice(5).trim().split(' ');
                 await takeCommand(sock, chatId, message, takeArgs);
+                break;
+            case userMessage.startsWith('.flirt'):
+                console.log('Flirt command detected');
+                try {
+                    await flirtCommand(sock, chatId, message, senderId);
+                } catch (error) {
+                    console.error('Error executing flirt command:', error);
+                    await sock.sendMessage(chatId, { 
+                        text: '❌ An error occurred while processing the command.' 
+                    });
+                }
                 break;
             default:
                 if (isGroup) {

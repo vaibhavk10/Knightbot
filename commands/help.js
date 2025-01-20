@@ -82,6 +82,7 @@ async function helpCommand(sock, chatId, channelLink) {
 🎯 *Fun Commands*:
 ║ ➤ .compliment @user
 ║ ➤ .insult @user
+║ ➤ .flirt
 ╚═══════════════════╝
 
 Join our channel for updates:`;
