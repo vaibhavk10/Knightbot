@@ -12,7 +12,9 @@ const EventEmitter = require('events');
 const msgRetryCounterCache = new NodeCache();
 const http = require('http');
 const { isWelcomeOn, isGoodByeOn } = require('./sql');
-const dns = require('dns');
+const dns = require('dns').promises;
+const { promisify } = require('util');
+const execPromisified = promisify(exec);
 
 // Set DNS servers to Google's public DNS
 dns.setServers(['8.8.8.8', '8.8.4.4']);
@@ -66,9 +68,46 @@ const checkSessionFiles = () => {
     }
 };
 
+// Add this function before startConnection
+async function checkDNS() {
+    try {
+        // Try multiple DNS servers
+        const servers = ['8.8.8.8', '8.8.4.4', '1.1.1.1'];
+        for (const server of servers) {
+            dns.setServers([server]);
+            try {
+                await dns.resolve4('web.whatsapp.com');
+                printLog.info(`Successfully resolved using DNS server ${server}`);
+                return true;
+            } catch (err) {
+                printLog.warn(`Failed to resolve using DNS ${server}: ${err.message}`);
+                continue;
+            }
+        }
+
+        // If all DNS servers fail, try using dig
+        const { stdout } = await execPromisified('dig web.whatsapp.com');
+        if (stdout.includes('ANSWER SECTION')) {
+            printLog.info('Successfully resolved using dig');
+            return true;
+        }
+        
+        throw new Error('All DNS resolution methods failed');
+    } catch (error) {
+        printLog.error('DNS Check Failed:', error.message);
+        return false;
+    }
+}
+
 // Automatic reconnection function
 const startConnection = async () => {
     try {
+        // Check DNS resolution first
+        const dnsOk = await checkDNS();
+        if (!dnsOk) {
+            throw new Error('DNS resolution failed');
+        }
+
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         const { version } = await fetchLatestBaileysVersion();
         
@@ -81,16 +120,29 @@ const startConnection = async () => {
             logger,
             browser: Browsers.windows('Desktop'),
             version,
-            connectTimeoutMs: 60000, // Increase timeout
+            connectTimeoutMs: 60000,
             retryRequestDelayMs: 5000,
             maxRetries: 5,
             defaultQueryTimeoutMs: 60000,
             emitOwnEvents: true,
-            // Add network configuration
             network: {
-                // Use Google DNS
                 dns: {
-                    servers: ['8.8.8.8', '8.8.4.4']
+                    servers: ['8.8.8.8', '8.8.4.4', '1.1.1.1']
+                }
+            },
+            fetchAgent: {
+                // Add custom DNS resolution
+                lookup: async (hostname, options, callback) => {
+                    try {
+                        const addresses = await dns.resolve4(hostname);
+                        if (addresses && addresses.length > 0) {
+                            callback(null, addresses[0], 4);
+                        } else {
+                            callback(new Error('No addresses found'), null);
+                        }
+                    } catch (err) {
+                        callback(err, null);
+                    }
                 }
             }
         });
@@ -295,7 +347,6 @@ const startConnection = async () => {
     } catch (err) {
         printLog.error('Fatal error:', err);
         if (!connectionState.isClosing) {
-            // Add exponential backoff for reconnection
             const delay = Math.min(1000 * Math.pow(2, connectionState.retryCount), 60000);
             connectionState.retryCount++;
             setTimeout(startConnection, delay);
