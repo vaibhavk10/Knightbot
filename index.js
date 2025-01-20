@@ -16,8 +16,35 @@ const dns = require('dns').promises;
 const { promisify } = require('util');
 const execPromisified = promisify(exec);
 
-// Set DNS servers to Google's public DNS
-dns.setServers(['8.8.8.8', '8.8.4.4']);
+// Custom DNS resolver setup
+const CUSTOM_RESOLV_CONF = process.env.RESOLV_CONF || '/app/resolv.conf';
+const DNS_SERVERS = ['8.8.8.8', '8.8.4.4', '1.1.1.1'];
+
+// Initialize DNS servers
+async function initDNS() {
+    try {
+        // Try to read custom resolv.conf if it exists
+        if (fs.existsSync(CUSTOM_RESOLV_CONF)) {
+            const resolveConf = fs.readFileSync(CUSTOM_RESOLV_CONF, 'utf8');
+            const servers = resolveConf
+                .split('\n')
+                .filter(line => line.startsWith('nameserver'))
+                .map(line => line.split('nameserver')[1].trim());
+            
+            if (servers.length > 0) {
+                dns.setServers(servers);
+                printLog.info('Using custom DNS servers from resolv.conf');
+                return;
+            }
+        }
+    } catch (error) {
+        printLog.warn('Error reading custom resolv.conf:', error.message);
+    }
+
+    // Fallback to hardcoded DNS servers
+    dns.setServers(DNS_SERVERS);
+    printLog.info('Using fallback DNS servers');
+}
 
 // Increase event listener limit
 EventEmitter.defaultMaxListeners = 2000;
@@ -353,6 +380,9 @@ const startConnection = async () => {
         }
     }
 }
+
+// Call initDNS before starting the connection
+await initDNS();
 
 // Start the bot
 startConnection();
