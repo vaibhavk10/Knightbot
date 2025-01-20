@@ -381,18 +381,33 @@ const startConnection = async () => {
     }
 }
 
-// Call initDNS before starting the connection
-await initDNS();
+// Main initialization function
+async function initialize() {
+    try {
+        // Initialize DNS
+        await initDNS();
+        
+        // Start the bot
+        await startConnection();
+        
+        // Start HTTP server
+        server.listen(7860, '0.0.0.0', () => {
+            printLog.info('Health check server running on port 7860');
+        });
+    } catch (error) {
+        printLog.error('Initialization error:', error);
+        process.exit(1);
+    }
+}
 
-// Start the bot
-startConnection();
-
-// Add this near the bottom of the file, before startConnection()
+// Create HTTP server
 const server = http.createServer((req, res) => {
     res.writeHead(200);
     res.end('Bot is running!');
 });
 
-server.listen(7860, '0.0.0.0', () => {
-    printLog.info('Health check server running on port 7860');
+// Start the application
+initialize().catch(error => {
+    printLog.error('Fatal error during initialization:', error);
+    process.exit(1);
 });
