@@ -46,6 +46,10 @@ const blurCommand = require('./commands/img-blur');
 const welcomeCommand = require('./commands/welcome');
 const goodbyeCommand = require('./commands/goodbye');
 const githubCommand = require('./commands/github');
+const { handleAntiBadwordCommand, handleBadwordDetection } = require('./lib/antibadword');
+const antibadwordCommand = require('./commands/antibadword');
+const { handleChatbotCommand, handleChatbotResponse } = require('./commands/chatbot');
+const takeCommand = require('./commands/take');
 
 // Global settings
 global.packname = settings.packname;
@@ -76,17 +80,27 @@ async function handleMessages(sock, messageUpdate, printLog) {
         }
 
         // Basic message response in private chat
-        if (!isGroup && (userMessage === 'hi' || userMessage === 'hello' || userMessage === 'bot')) {
+        if (!isGroup && (userMessage === 'hi' || userMessage === 'hello' || userMessage === 'bot' || userMessage === 'hlo')) {
             await sock.sendMessage(chatId, {
                 text: 'Hi, How can I help you?\nYou can use .menu for more info and commands.'
             });
             return;
         }
 
+        if (!message.key.fromMe) incrementMessageCount(chatId, senderId);
+
+        // Check for bad words FIRST, before ANY other processing
+        if (isGroup && userMessage) {
+            await handleBadwordDetection(sock, chatId, message, userMessage, senderId);
+        }
+
         // Then check for command prefix
         if (!userMessage.startsWith('.')) {
             if (isGroup) {
+                // Process non-command messages first
+                await handleChatbotResponse(sock, chatId, message, userMessage, senderId);
                 await Antilink(message, sock);
+                await handleBadwordDetection(sock, chatId, message, userMessage, senderId);
             }
             return;
         }
@@ -121,8 +135,6 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 }
             }
         }
-
-        if (!message.key.fromMe) incrementMessageCount(chatId, senderId);
 
         // Command handlers
         switch (true) {
@@ -356,9 +368,51 @@ async function handleMessages(sock, messageUpdate, printLog) {
             case userMessage === '.repo':
                 await githubCommand(sock, chatId);
                 break;
+            case userMessage.startsWith('.antibadword'):
+                if (!isGroup) {
+                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups.' });
+                    return;
+                }
+                
+                const adminStatus = await isAdmin(sock, chatId, senderId);
+                isSenderAdmin = adminStatus.isSenderAdmin;
+                isBotAdmin = adminStatus.isBotAdmin;
+                
+                if (!isBotAdmin) {
+                    await sock.sendMessage(chatId, { text: '*Bot must be admin to use this feature*' });
+                    return;
+                }
+                
+                await antibadwordCommand(sock, chatId, message, senderId, isSenderAdmin);
+                break;
+            case userMessage.startsWith('.chatbot'):
+                if (!isGroup) {
+                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups.' });
+                    return;
+                }
+                
+                // Check if sender is admin
+                const chatbotAdminStatus = await isAdmin(sock, chatId, senderId);
+                if (!chatbotAdminStatus.isSenderAdmin) {
+                    await sock.sendMessage(chatId, { text: '*Only admins can use this command*' });
+                    return;
+                }
+                
+                const match = userMessage.slice(8).trim();
+                await handleChatbotCommand(sock, chatId, message, match);
+                break;
+            case userMessage.startsWith('.take'):
+                const takeArgs = userMessage.slice(5).trim().split(' ');
+                await takeCommand(sock, chatId, message, takeArgs);
+                break;
             default:
                 if (isGroup) {
+                    // Handle non-command group messages
+                    if (userMessage) {  // Make sure there's a message
+                        await handleChatbotResponse(sock, chatId, message, userMessage, senderId);
+                    }
                     await Antilink(message, sock);
+                    await handleBadwordDetection(sock, chatId, message, userMessage, senderId);
                 }
                 break;
         }

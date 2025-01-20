@@ -173,6 +173,102 @@ async function isGoodByeOn(jid) {
     }
 }
 
+// Add these functions to your existing SQL helper file
+async function setAntiBadword(groupId, type, action) {
+    try {
+        const data = loadUserGroupData();
+        if (!data.antibadword) data.antibadword = {};
+        if (!data.antibadword[groupId]) data.antibadword[groupId] = {};
+        
+        data.antibadword[groupId] = {
+            enabled: type === 'on',
+            action: action || 'delete'
+        };
+        
+        saveUserGroupData(data);
+        return true;
+    } catch (error) {
+        console.error('Error setting antibadword:', error);
+        return false;
+    }
+}
+
+async function getAntiBadword(groupId, type) {
+    try {
+        const data = loadUserGroupData();
+        console.log('Loading antibadword config for group:', groupId);
+        console.log('Current data:', data.antibadword);
+        
+        if (!data.antibadword || !data.antibadword[groupId]) {
+            console.log('No antibadword config found');
+            return null;
+        }
+        
+        const config = data.antibadword[groupId];
+        console.log('Found config:', config);
+        
+        return type === 'on' ? config : null;
+    } catch (error) {
+        console.error('Error getting antibadword:', error);
+        return null;
+    }
+}
+
+async function removeAntiBadword(groupId, type) {
+    try {
+        const data = loadUserGroupData();
+        if (data.antibadword && data.antibadword[groupId]) {
+            delete data.antibadword[groupId];
+            saveUserGroupData(data);
+        }
+        return true;
+    } catch (error) {
+        console.error('Error removing antibadword:', error);
+        return false;
+    }
+}
+
+async function setChatbot(groupId, enabled) {
+    try {
+        const data = loadUserGroupData();
+        if (!data.chatbot) data.chatbot = {};
+        
+        data.chatbot[groupId] = {
+            enabled: enabled
+        };
+        
+        saveUserGroupData(data);
+        return true;
+    } catch (error) {
+        console.error('Error setting chatbot:', error);
+        return false;
+    }
+}
+
+async function getChatbot(groupId) {
+    try {
+        const data = loadUserGroupData();
+        return data.chatbot?.[groupId] || null;
+    } catch (error) {
+        console.error('Error getting chatbot:', error);
+        return null;
+    }
+}
+
+async function removeChatbot(groupId) {
+    try {
+        const data = loadUserGroupData();
+        if (data.chatbot && data.chatbot[groupId]) {
+            delete data.chatbot[groupId];
+            saveUserGroupData(data);
+        }
+        return true;
+    } catch (error) {
+        console.error('Error removing chatbot:', error);
+        return false;
+    }
+}
+
 module.exports = {
     // ... existing exports
     setAntilink,
@@ -186,5 +282,11 @@ module.exports = {
     isWelcomeOn,
     addGoodbye,
     delGoodBye,
-    isGoodByeOn
+    isGoodByeOn,
+    setAntiBadword,
+    getAntiBadword,
+    removeAntiBadword,
+    setChatbot,
+    getChatbot,
+    removeChatbot,
 }; 

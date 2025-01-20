@@ -36,6 +36,7 @@ async function helpCommand(sock, chatId, channelLink) {
 ║ ➤ .simage <reply to sticker>
 ║ ➤ .sticker <reply to image>
 ║ ➤ .meme
+║ ➤ .take <packname> 
 ╚═══════════════════╝   
 
 ╔═══════════════════╗
@@ -50,13 +51,15 @@ async function helpCommand(sock, chatId, channelLink) {
 ║ ➤ .warnings @user
 ║ ➤ .warn @user
 ║ ➤ .antilink
+║ ➤ .antibadword
 ║ ➤ .clear
 ║ ➤ .tag <message>
 ║ ➤ .tagall
+║ ➤ .chatbot
 ╚═══════════════════╝
 
 ╔═══════════════════╗
-*Github Commands:*
+🔗 *Github Commands:*
 ║ ➤ .git
 ║ ➤ .github
 ║ ➤ .sc
@@ -97,16 +100,8 @@ Join our channel for updates:`;
                     isForwarded: true,
                     forwardedNewsletterMessageInfo: {
                         newsletterJid: '120363161513685998@newsletter',
-                        newsletterName: 'KnightBot MD powered by Mr Unique Hacker',
+                        newsletterName: 'KnightBot MD by Mr Unique Hacker',
                         serverMessageId: -1
-                    },
-                    externalAdReply: {
-                        title: 'KnightBot MD',
-                        body: 'Menu',
-                        thumbnailUrl: 'https://i.imgur.com/trP1VbB.png',
-                        sourceUrl: channelLink,
-                        mediaType: 1,
-                        renderLargerThumbnail: true
                     }
                 }
             });
@@ -119,7 +114,7 @@ Join our channel for updates:`;
                     isForwarded: true,
                     forwardedNewsletterMessageInfo: {
                         newsletterJid: '120363161513685998@newsletter',
-                        newsletterName: 'KnightBot MD powered by Mr Unique Hacker',
+                        newsletterName: 'KnightBot MD by Mr Unique Hacker',
                         serverMessageId: -1
                     } 
                 }

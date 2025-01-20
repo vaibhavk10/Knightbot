@@ -7,12 +7,24 @@
       "action": "warn"
     }
   },
+  "antibadword": {
+    "120363026391945437@g.us": {
+      "enabled": true,
+      "action": "delete"
+    }
+  },
   "warnings": {
     "120363026391945437@g.us": {
-      "14703105589@s.whatsapp.net": 2
+      "14703105589@s.whatsapp.net": 4
     }
   },
   "sudo": [],
-  "welcome": {},
-  "goodbye": {}
+  "welcome": {
+    "120363026391945437@g.us": {
+      "enabled": true,
+      "message": "set Hi welcome to group"
+    }
+  },
+  "goodbye": {},
+  "chatbot": {}
 }
