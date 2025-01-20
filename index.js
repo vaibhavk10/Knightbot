@@ -12,6 +12,10 @@ const EventEmitter = require('events');
 const msgRetryCounterCache = new NodeCache();
 const http = require('http');
 const { isWelcomeOn, isGoodByeOn } = require('./sql');
+const dns = require('dns');
+
+// Set DNS servers to Google's public DNS
+dns.setServers(['8.8.8.8', '8.8.4.4']);
 
 // Increase event listener limit
 EventEmitter.defaultMaxListeners = 2000;
@@ -63,10 +67,11 @@ const checkSessionFiles = () => {
 };
 
 // Automatic reconnection function
-async function startConnection() {
+const startConnection = async () => {
     try {
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         const { version } = await fetchLatestBaileysVersion();
+        
         const sock = makeWASocket({
             auth: {
                 creds: state.creds,
@@ -76,45 +81,17 @@ async function startConnection() {
             logger,
             browser: Browsers.windows('Desktop'),
             version,
-            keepAliveIntervalMs: 5000,
-            syncFullHistory: true,
-            defaultQueryTimeoutMs: 30000,
+            connectTimeoutMs: 60000, // Increase timeout
             retryRequestDelayMs: 5000,
-            markOnlineOnConnect: false,
-            fireInitQueries: true,
+            maxRetries: 5,
+            defaultQueryTimeoutMs: 60000,
             emitOwnEvents: true,
-            generateHighQualityLinkPreview: true,
-            getMessage: async (key) => {
-                if (store) {
-                    const msg = await store.loadMessage(key.remoteJid, key.id);
-                    return msg?.message || undefined;
+            // Add network configuration
+            network: {
+                // Use Google DNS
+                dns: {
+                    servers: ['8.8.8.8', '8.8.4.4']
                 }
-                return {
-                    conversation: "An Error Occurred, Repeat Command!"
-                };
-            },
-            patchMessageBeforeSending: (message) => {
-                const requiresPatch = !!(
-                    message.buttonsMessage ||
-                    message.templateMessage ||
-                    message.listMessage ||
-                    message.scheduledCallCreationMessage ||
-                    message.callLogMesssage
-                );
-                if (requiresPatch) {
-                    message = {
-                        viewOnceMessage: {
-                            message: {
-                                messageContextInfo: {
-                                    deviceListMetadataVersion: 2,
-                                    deviceListMetadata: {},
-                                },
-                                ...message,
-                            },
-                        },
-                    };
-                }
-                return message;
             }
         });
 
@@ -296,9 +273,15 @@ async function startConnection() {
 
         // Handle uncaught errors
         process.on('uncaughtException', (err) => {
-            printLog.error('Uncaught Exception:', err);
-            if (!connectionState.isClosing) {
-                setTimeout(startConnection, 3000);
+            if (err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN') {
+                printLog.warn('DNS resolution failed, retrying...');
+                // Reset DNS servers and retry
+                dns.setServers(['8.8.8.8', '8.8.4.4']);
+                if (!connectionState.isClosing) {
+                    setTimeout(startConnection, 5000);
+                }
+            } else {
+                printLog.error('Uncaught Exception:', err);
             }
         });
 
@@ -312,7 +295,10 @@ async function startConnection() {
     } catch (err) {
         printLog.error('Fatal error:', err);
         if (!connectionState.isClosing) {
-            setTimeout(startConnection, 3000);
+            // Add exponential backoff for reconnection
+            const delay = Math.min(1000 * Math.pow(2, connectionState.retryCount), 60000);
+            connectionState.retryCount++;
+            setTimeout(startConnection, delay);
         }
     }
 }
@@ -326,6 +312,6 @@ const server = http.createServer((req, res) => {
     res.end('Bot is running!');
 });
 
-server.listen(7860, () => {
+server.listen(7860, '0.0.0.0', () => {
     printLog.info('Health check server running on port 7860');
 });
