@@ -5,11 +5,13 @@ const P = require('pino');
 const fs = require('fs');
 const path = require('path');
 const { handleMessages } = require('./main');
-const { generateSessionId } = require('./utils');
+const { generateSessionId, saveSession, loadSession } = require('./utils');
+const { exec } = require('child_process');
 const NodeCache = require('node-cache');
 const EventEmitter = require('events');
-const http = require('http');
 const msgRetryCounterCache = new NodeCache();
+const http = require('http');
+const { isWelcomeOn, isGoodByeOn } = require('./sql');
 
 // Increase event listener limit
 EventEmitter.defaultMaxListeners = 2000;
@@ -18,6 +20,8 @@ process.setMaxListeners(2000);
 // Global settings
 global.packname = settings.packname;
 global.author = settings.author;
+global.channelLink = "https://whatsapp.com/channel/0029Va90zAnIHphOuO8Msp3A";
+global.ytch = "Mr Unique Hacker";
 
 // Custom logger
 const logger = P({
@@ -38,19 +42,31 @@ let connectionState = {
     isConnected: false,
     qrDisplayed: false,
     retryCount: 0,
+    sessionExists: false,
+    lastPing: Date.now(),
     sessionId: process.env.SESSION_ID || null,
     isClosing: false,
     sock: null
 };
 
+// Add this near your useMultiFileAuthState call
 const sessionPath = './session';
 
-// Start connection
-const startConnection = async () => {
+// Add debug logging
+const checkSessionFiles = () => {
+    try {
+        const files = fs.readdirSync(sessionPath);
+        printLog.info('Current session files: ' + files.join(', '));
+    } catch (err) {
+        printLog.error('Error reading session directory:', err);
+    }
+};
+
+// Automatic reconnection function
+async function startConnection() {
     try {
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         const { version } = await fetchLatestBaileysVersion();
-        
         const sock = makeWASocket({
             auth: {
                 creds: state.creds,
@@ -60,15 +76,132 @@ const startConnection = async () => {
             logger,
             browser: Browsers.windows('Desktop'),
             version,
-            connectTimeoutMs: 60000,
+            keepAliveIntervalMs: 5000,
+            syncFullHistory: true,
+            defaultQueryTimeoutMs: 30000,
             retryRequestDelayMs: 5000,
-            defaultQueryTimeoutMs: 60000,
-            msgRetryCounterCache
+            markOnlineOnConnect: false,
+            fireInitQueries: true,
+            emitOwnEvents: true,
+            generateHighQualityLinkPreview: true,
+            getMessage: async (key) => {
+                if (store) {
+                    const msg = await store.loadMessage(key.remoteJid, key.id);
+                    return msg?.message || undefined;
+                }
+                return {
+                    conversation: "An Error Occurred, Repeat Command!"
+                };
+            },
+            patchMessageBeforeSending: (message) => {
+                const requiresPatch = !!(
+                    message.buttonsMessage ||
+                    message.templateMessage ||
+                    message.listMessage ||
+                    message.scheduledCallCreationMessage ||
+                    message.callLogMesssage
+                );
+                if (requiresPatch) {
+                    message = {
+                        viewOnceMessage: {
+                            message: {
+                                messageContextInfo: {
+                                    deviceListMetadataVersion: 2,
+                                    deviceListMetadata: {},
+                                },
+                                ...message,
+                            },
+                        },
+                    };
+                }
+                return message;
+            }
         });
 
         connectionState.sock = sock;
 
-        // Connection update handler
+        // Register group participants event handler ONCE
+        sock.ev.on('group-participants.update', async (update) => {
+            try {
+                const { id, participants, action } = update;
+                
+                // Check if welcome/goodbye is enabled for this group
+                const isWelcomeEnabled = await isWelcomeOn(id);
+                const isGoodbyeEnabled = await isGoodByeOn(id);
+
+                if (action === 'add' && isWelcomeEnabled) {
+                    // Get participant names
+                    const participantNames = await Promise.all(participants.map(async (jid) => {
+                        try {
+                            const contact = await sock.contactQuery(jid);
+                            return {
+                                mention: `@${jid.split('@')[0]}`,
+                                name: contact.pushName || contact.notify || jid.split('@')[0]
+                            };
+                        } catch (err) {
+                            return {
+                                mention: `@${jid.split('@')[0]}`,
+                                name: jid.split('@')[0]
+                            };
+                        }
+                    }));
+
+                    // Create welcome message with names
+                    const welcomeText = `Welcome ${participantNames.map(p => p.name).join(', ')} to the group! 🎉`;
+
+                    await sock.sendMessage(id, {
+                        text: welcomeText,
+                        mentions: participants,
+                        contextInfo: {
+                            forwardingScore: 999,
+                            isForwarded: true,
+                            forwardedNewsletterMessageInfo: {
+                                newsletterJid: '120363161513685998@newsletter',
+                                newsletterName: 'KnightBot MD',
+                                serverMessageId: -1
+                            }
+                        }
+                    });
+                } else if (action === 'remove' && isGoodbyeEnabled) {
+                    // Get participant names for goodbye message
+                    const participantNames = await Promise.all(participants.map(async (jid) => {
+                        try {
+                            const contact = await sock.contactQuery(jid);
+                            return {
+                                mention: `@${jid.split('@')[0]}`,
+                                name: contact.pushName || contact.notify || jid.split('@')[0]
+                            };
+                        } catch (err) {
+                            return {
+                                mention: `@${jid.split('@')[0]}`,
+                                name: jid.split('@')[0]
+                            };
+                        }
+                    }));
+
+                    // Create goodbye message with names
+                    const goodbyeText = `Goodbye ${participantNames.map(p => p.name).join(', ')} 👋`;
+
+                    await sock.sendMessage(id, {
+                        text: goodbyeText,
+                        mentions: participants,
+                        contextInfo: {
+                            forwardingScore: 999,
+                            isForwarded: true,
+                            forwardedNewsletterMessageInfo: {
+                                newsletterJid: '120363161513685998@newsletter',
+                                newsletterName: 'KnightBot MD',
+                                serverMessageId: -1
+                            }
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Error in group-participants.update handler:', error);
+            }
+        });
+
+        // Connection update event handler
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
 
@@ -87,25 +220,51 @@ const startConnection = async () => {
                 const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
                 printLog.warn(`Connection closed due to ${lastDisconnect?.error?.message}`);
                 
-                if (shouldReconnect && !connectionState.isClosing) {
-                    const delay = Math.min(1000 * Math.pow(2, connectionState.retryCount), 60000);
-                    connectionState.retryCount++;
-                    setTimeout(startConnection, delay);
+                if (shouldReconnect) {
+                    printLog.info('Reconnecting...');
+                    setTimeout(startConnection, 3000);
+                } else {
+                    printLog.error('Connection closed. You are logged out.');
+                    process.exit(0);
                 }
             }
 
             if (connection === 'open') {
                 connectionState.isConnected = true;
                 connectionState.qrDisplayed = false;
-                connectionState.retryCount = 0;
-                printLog.success('Connected to WhatsApp!');
+                printLog.success('Bot Connected Successfully!');
+                
+                // Generate or use existing session ID
+                if (!connectionState.sessionId) {
+                    connectionState.sessionId = generateSessionId();
+                }
+                
+                printLog.success(`Session ID: ${connectionState.sessionId}`);
+
+                // Send connection message
+                try {
+                    await sock.sendMessage(sock.user.id, {
+                        text: `🤖 *KnightBot Connected*\n\nSession ID: ${connectionState.sessionId}`
+                    });
+                } catch (err) {}
+
+                // Keep connection alive
+                setInterval(async () => {
+                    try {
+                        await sock.sendPresenceUpdate('available');
+                    } catch (err) {}
+                }, 10000);
             }
         });
 
-        // Credentials update handler
-        sock.ev.on('creds.update', saveCreds);
+        // Add logging to creds.update
+        sock.ev.on('creds.update', async () => {
+            await saveCreds();
+            printLog.info('Credentials updated, checking files...');
+            checkSessionFiles();
+        });
 
-        // Message handler
+        // Handle messages
         sock.ev.on('messages.upsert', async (messageUpdate) => {
             if (connectionState.isConnected) {
                 try {
@@ -116,37 +275,57 @@ const startConnection = async () => {
             }
         });
 
+        // Handle errors
+        sock.ev.on('error', async (error) => {
+            printLog.error('Connection error:', error);
+            if (!connectionState.isClosing) {
+                setTimeout(startConnection, 3000);
+            }
+        });
+
+        // Handle graceful shutdown
+        process.on('SIGINT', async () => {
+            connectionState.isClosing = true;
+            printLog.warn('Received shutdown signal');
+            printLog.info('Closing connection...');
+            if (connectionState.sock) {
+                await connectionState.sock.end();
+            }
+            process.exit(0);
+        });
+
+        // Handle uncaught errors
+        process.on('uncaughtException', (err) => {
+            printLog.error('Uncaught Exception:', err);
+            if (!connectionState.isClosing) {
+                setTimeout(startConnection, 3000);
+            }
+        });
+
+        process.on('unhandledRejection', (err) => {
+            printLog.error('Unhandled Rejection:', err);
+            if (!connectionState.isClosing) {
+                setTimeout(startConnection, 3000);
+            }
+        });
+
     } catch (err) {
-        printLog.error('Connection error:', err);
+        printLog.error('Fatal error:', err);
         if (!connectionState.isClosing) {
-            const delay = Math.min(1000 * Math.pow(2, connectionState.retryCount), 60000);
-            connectionState.retryCount++;
-            setTimeout(startConnection, delay);
+            setTimeout(startConnection, 3000);
         }
     }
-};
+}
 
-// Initialize and start
-const initialize = async () => {
-    try {
-        await startConnection();
-        
-        const server = http.createServer((req, res) => {
-            res.writeHead(200);
-            res.end('Bot is running!');
-        });
+// Start the bot
+startConnection();
 
-        server.listen(7860, '0.0.0.0', () => {
-            printLog.info('Health check server running on port 7860');
-        });
-    } catch (error) {
-        printLog.error('Initialization error:', error);
-        process.exit(1);
-    }
-};
+// Add this near the bottom of the file, before startConnection()
+const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('Bot is running!');
+});
 
-// Start the application
-initialize().catch(error => {
-    printLog.error('Fatal error during initialization:', error);
-    process.exit(1);
+server.listen(7860, () => {
+    printLog.info('Health check server running on port 7860');
 });
