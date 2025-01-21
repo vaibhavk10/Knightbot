@@ -12,7 +12,6 @@ const EventEmitter = require('events');
 const msgRetryCounterCache = new NodeCache();
 const http = require('http');
 const { isWelcomeOn, isGoodByeOn } = require('./sql');
-const net = require('net');
 
 // Increase event listener limit
 EventEmitter.defaultMaxListeners = 2000;
@@ -47,8 +46,7 @@ let connectionState = {
     lastPing: Date.now(),
     sessionId: process.env.SESSION_ID || null,
     isClosing: false,
-    sock: null,
-    server: null
+    sock: null
 };
 
 // Add this near your useMultiFileAuthState call
@@ -64,49 +62,11 @@ const checkSessionFiles = () => {
     }
 };
 
-// Function to check if port is in use
-const isPortInUse = async (port) => {
-    return new Promise((resolve) => {
-        const server = net.createServer()
-            .once('error', () => resolve(true))
-            .once('listening', () => {
-                server.close();
-                resolve(false);
-            })
-            .listen(port);
-    });
-};
-
-// Function to find available port
-const findAvailablePort = async (startPort) => {
-    let port = startPort;
-    while (await isPortInUse(port)) {
-        port++;
-    }
-    return port;
-};
-
-// Function to kill existing connections
-const killExistingConnections = async () => {
-    return new Promise((resolve) => {
-        const server = net.createServer();
-        server.once('error', () => {
-            // Port is in use, try to force close it
-            server.close(() => resolve());
-        });
-        server.once('listening', () => {
-            server.close(() => resolve());
-        });
-        server.listen(7860);
-    });
-};
-
 // Automatic reconnection function
 async function startConnection() {
     try {
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         const { version } = await fetchLatestBaileysVersion();
-        
         const sock = makeWASocket({
             auth: {
                 creds: state.creds,
@@ -116,16 +76,45 @@ async function startConnection() {
             logger,
             browser: Browsers.windows('Desktop'),
             version,
-            connectTimeoutMs: 60000,
+            keepAliveIntervalMs: 5000,
+            syncFullHistory: true,
+            defaultQueryTimeoutMs: 30000,
             retryRequestDelayMs: 5000,
-            defaultQueryTimeoutMs: 60000,
+            markOnlineOnConnect: false,
+            fireInitQueries: true,
             emitOwnEvents: true,
-            // Add WebSocket options
-            ws: {
-                agent: undefined,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            generateHighQualityLinkPreview: true,
+            getMessage: async (key) => {
+                if (store) {
+                    const msg = await store.loadMessage(key.remoteJid, key.id);
+                    return msg?.message || undefined;
                 }
+                return {
+                    conversation: "An Error Occurred, Repeat Command!"
+                };
+            },
+            patchMessageBeforeSending: (message) => {
+                const requiresPatch = !!(
+                    message.buttonsMessage ||
+                    message.templateMessage ||
+                    message.listMessage ||
+                    message.scheduledCallCreationMessage ||
+                    message.callLogMesssage
+                );
+                if (requiresPatch) {
+                    message = {
+                        viewOnceMessage: {
+                            message: {
+                                messageContextInfo: {
+                                    deviceListMetadataVersion: 2,
+                                    deviceListMetadata: {},
+                                },
+                                ...message,
+                            },
+                        },
+                    };
+                }
+                return message;
             }
         });
 
@@ -231,18 +220,19 @@ async function startConnection() {
                 const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
                 printLog.warn(`Connection closed due to ${lastDisconnect?.error?.message}`);
                 
-                if (shouldReconnect && !connectionState.isClosing) {
-                    const delay = Math.min(1000 * Math.pow(2, connectionState.retryCount), 60000);
-                    connectionState.retryCount++;
-                    setTimeout(startConnection, delay);
+                if (shouldReconnect) {
+                    printLog.info('Reconnecting...');
+                    setTimeout(startConnection, 3000);
+                } else {
+                    printLog.error('Connection closed. You are logged out.');
+                    process.exit(0);
                 }
             }
 
             if (connection === 'open') {
                 connectionState.isConnected = true;
                 connectionState.qrDisplayed = false;
-                connectionState.retryCount = 0;
-                printLog.success('Connected to WhatsApp!');
+                printLog.success('Bot Connected Successfully!');
                 
                 // Generate or use existing session ID
                 if (!connectionState.sessionId) {
@@ -327,50 +317,15 @@ async function startConnection() {
     }
 }
 
-// Initialize and start
-const initialize = async () => {
-    try {
-        // Kill any existing connections
-        await killExistingConnections();
+// Start the bot
+startConnection();
 
-        // Find available port
-        const port = await findAvailablePort(7860);
+// Add this near the bottom of the file, before startConnection()
+const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('Bot is running!');
+});
 
-        // Start HTTP server
-        const server = http.createServer((req, res) => {
-            res.writeHead(200);
-            res.end('Bot is running!');
-        });
-
-        // Handle server errors
-        server.on('error', (error) => {
-            printLog.error('Server error:', error);
-            if (error.code === 'EADDRINUSE') {
-                printLog.warn('Port in use, trying another port...');
-                server.close();
-                initialize();
-            }
-        });
-
-        // Store server reference
-        connectionState.server = server;
-
-        // Start server
-        server.listen(port, '0.0.0.0', () => {
-            printLog.info(`Health check server running on port ${port}`);
-        });
-
-        // Start WhatsApp connection
-        await startConnection();
-
-    } catch (error) {
-        printLog.error('Initialization error:', error);
-        process.exit(1);
-    }
-};
-
-// Start the application
-initialize().catch(error => {
-    printLog.error('Fatal error during initialization:', error);
-    process.exit(1);
+server.listen(7860, () => {
+    printLog.info('Health check server running on port 7860');
 });
