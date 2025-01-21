@@ -1,0 +1,44 @@
+FROM node:lts-buster
+
+# Install required dependencies including DNS utils
+RUN apt-get update && \
+    apt-get install -y \
+    ffmpeg \
+    webp \
+    git \
+    dnsutils \
+    ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Clone the repository first
+RUN git clone https://github.com/vaibhavk10/knightbot.git . && \
+    ls -la  # This will show us the contents to verify
+
+# Now install dependencies after we have the package.json
+RUN if [ -f "package.json" ]; then \
+    npm install; \
+    else \
+    echo "package.json not found"; \
+    exit 1; \
+    fi
+
+# Create all necessary directories and set permissions
+RUN mkdir -p /app/session && \
+    mkdir -p /app/temp && \
+    mkdir -p /app/database && \
+    chmod -R 777 /app/session && \
+    chmod -R 777 /app/temp && \
+    chmod -R 777 /app/database && \
+    chmod -R 777 /app
+
+# Expose port
+EXPOSE 7860
+
+# Set DNS servers explicitly
+ENV NODE_DNS_SERVERS="8.8.8.8,1.1.1.1"
+
+# Start command
+CMD ["node", "index.js"] 
