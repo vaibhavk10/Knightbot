@@ -63,11 +63,35 @@ const checkSessionFiles = () => {
     }
 };
 
+// Add this helper function to handle session cleanup
+const cleanupSession = async (sock, jid) => {
+    try {
+        const sessionPath = `./session/session-${jid}.json`;
+        if (fs.existsSync(sessionPath)) {
+            fs.unlinkSync(sessionPath);
+            printLog.info(`Cleaned up session for ${jid}`);
+        }
+    } catch (err) {
+        printLog.error(`Error cleaning up session: ${err}`);
+    }
+};
+
 // Automatic reconnection function
 async function startConnection() {
     try {
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         const { version } = await fetchLatestBaileysVersion();
+        
+        // Add error handling for decryption failures
+        const handleDecryptionError = async (error, m) => {
+            if (error.message.includes('Bad MAC')) {
+                printLog.warn(`Decryption failed for message from ${m.key.remoteJid}`);
+                await cleanupSession(sock, m.key.remoteJid.split('@')[0]);
+                return;
+            }
+            throw error;
+        };
+
         const sock = makeWASocket({
             auth: {
                 creds: state.creds,
@@ -101,7 +125,7 @@ async function startConnection() {
             },
             connectTimeoutMs: 60000,
             retryRequestDelayMs: 5000,
-            keepAliveIntervalMs: 5000,
+            keepAliveIntervalMs: 10000,
             syncFullHistory: true,
             defaultQueryTimeoutMs: 30000,
             markOnlineOnConnect: false,
@@ -110,8 +134,15 @@ async function startConnection() {
             generateHighQualityLinkPreview: true,
             getMessage: async (key) => {
                 if (store) {
-                    const msg = await store.loadMessage(key.remoteJid, key.id);
-                    return msg?.message || undefined;
+                    try {
+                        const msg = await store.loadMessage(key.remoteJid, key.id);
+                        return msg?.message || undefined;
+                    } catch (error) {
+                        await handleDecryptionError(error, { key });
+                        return {
+                            conversation: "Message decryption failed"
+                        };
+                    }
                 }
                 return {
                     conversation: "An Error Occurred, Repeat Command!"
@@ -242,6 +273,22 @@ async function startConnection() {
 
             if (connection === 'close') {
                 const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+                
+                // Clean up sessions on connection close
+                if (!shouldReconnect) {
+                    try {
+                        const files = fs.readdirSync(sessionPath);
+                        for (const file of files) {
+                            if (file.startsWith('session-')) {
+                                fs.unlinkSync(path.join(sessionPath, file));
+                            }
+                        }
+                        printLog.info('Cleaned up all sessions');
+                    } catch (err) {
+                        printLog.error('Error cleaning up sessions:', err);
+                    }
+                }
+                
                 printLog.warn(`Connection closed due to ${lastDisconnect?.error?.message}`);
                 
                 if (shouldReconnect) {
@@ -294,7 +341,15 @@ async function startConnection() {
                 try {
                     await handleMessages(sock, messageUpdate);
                 } catch (error) {
-                    console.error('Error in message handler:', error);
+                    if (error.message.includes('Bad MAC')) {
+                        const jid = messageUpdate.messages[0]?.key?.remoteJid;
+                        if (jid) {
+                            await cleanupSession(sock, jid.split('@')[0]);
+                            printLog.warn(`Session reset for ${jid} due to decryption error`);
+                        }
+                    } else {
+                        console.error('Error in message handler:', error);
+                    }
                 }
             }
         });
