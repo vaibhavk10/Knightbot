@@ -12,6 +12,7 @@ const EventEmitter = require('events');
 const msgRetryCounterCache = new NodeCache();
 const http = require('http');
 const { isWelcomeOn, isGoodByeOn } = require('./sql');
+const dns = require('dns');
 
 // Increase event listener limit
 EventEmitter.defaultMaxListeners = 2000;
@@ -76,10 +77,33 @@ async function startConnection() {
             logger,
             browser: Browsers.windows('Desktop'),
             version,
+            fetchAgent: {
+                lookup: async (hostname, options, callback) => {
+                    try {
+                        const addresses = await dns.promises.resolve4(hostname);
+                        if (addresses && addresses.length > 0) {
+                            callback(null, addresses[0], 4);
+                        } else {
+                            if (hostname === 'web.whatsapp.com') {
+                                callback(null, '157.240.196.35', 4);
+                            } else {
+                                callback(new Error('DNS resolution failed'), null);
+                            }
+                        }
+                    } catch (err) {
+                        if (hostname === 'web.whatsapp.com') {
+                            callback(null, '157.240.196.35', 4);
+                        } else {
+                            callback(err, null);
+                        }
+                    }
+                }
+            },
+            connectTimeoutMs: 60000,
+            retryRequestDelayMs: 5000,
             keepAliveIntervalMs: 5000,
             syncFullHistory: true,
             defaultQueryTimeoutMs: 30000,
-            retryRequestDelayMs: 5000,
             markOnlineOnConnect: false,
             fireInitQueries: true,
             emitOwnEvents: true,
