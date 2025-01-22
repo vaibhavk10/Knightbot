@@ -1,6 +1,6 @@
-FROM node:lts-buster
+FROM node:18-slim
 
-# Install required dependencies including DNS utils
+# Install required dependencies
 RUN apt-get update && \
     apt-get install -y \
     ffmpeg \
@@ -10,60 +10,95 @@ RUN apt-get update && \
     ca-certificates \
     iputils-ping \
     net-tools \
-    resolvconf \
+    build-essential \
+    python3 \
+    libvips \
+    libvips-dev \
+    libglib2.0-0 \
+    libglib2.0-dev \
+    gcc \
+    g++ \
+    make \
+    pkg-config \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Create a custom resolv.conf in the app directory
-RUN mkdir -p /app/dns && \
-    echo "nameserver 8.8.8.8" > /app/dns/resolv.conf && \
-    echo "nameserver 1.1.1.1" >> /app/dns/resolv.conf
+# Create necessary directories
+RUN mkdir -p /app/dns /app/session /app/temp /app/database
 
-# Clone the repository first
-RUN git clone https://github.com/vaibhavk10/knightbot.git . && \
-    ls -la
+# Clone the repository
+RUN rm -rf * && \
+    git clone https://github.com/vaibhavk10/knightbot.git . || \
+    (echo "Failed to clone repository, retrying..." && \
+    rm -rf * && \
+    git clone https://github.com/vaibhavk10/knightbot.git .)
 
-# Now install dependencies after we have the package.json
-RUN if [ -f "package.json" ]; then \
-    npm install; \
-    else \
-    echo "package.json not found"; \
-    exit 1; \
-    fi
+# Fix permissions and setup npm
+RUN mkdir -p /root/.npm && \
+    chmod -R 777 /root/.npm && \
+    npm config set unsafe-perm true && \
+    npm config set user 0
 
-# Create all necessary directories and set permissions
-RUN mkdir -p /app/session && \
-    mkdir -p /app/temp && \
-    mkdir -p /app/database && \
-    chmod -R 777 /app/session && \
-    chmod -R 777 /app/temp && \
-    chmod -R 777 /app/database && \
-    chmod -R 777 /app
+# Install dependencies first
+RUN npm install --no-package-lock --force
 
-# Create hosts file in app directory
-RUN echo "157.240.22.54 web.whatsapp.com" > /app/dns/hosts
+# Install and build sharp separately
+RUN npm install --no-package-lock --force sharp@0.32.6 && \
+    cd node_modules/sharp && \
+    npm run install && \
+    cd ../..
+
+# Set permissions
+RUN chmod -R 777 /app
 
 # Expose port
 EXPOSE 7860
 
-# Set DNS servers explicitly as environment variables
+# Set DNS configuration
 ENV NODE_DNS_SERVERS="8.8.8.8,1.1.1.1"
-ENV RESOLV_CONF="/app/dns/resolv.conf"
-ENV HOSTS_FILE="/app/dns/hosts"
 
-# Create a wrapper script for startup
+# Create startup script
 RUN echo '#!/bin/bash\n\
-export RESOLV_CONF="/app/dns/resolv.conf"\n\
-export NODE_OPTIONS="--dns-result-order=ipv4first --dns-server=8.8.8.8,1.1.1.1"\n\
-if ping -c 1 web.whatsapp.com >/dev/null 2>&1; then\n\
-    echo "DNS check passed"\n\
-    node index.js\n\
-else\n\
-    echo "Using fallback DNS..."\n\
-    node --dns-result-order=ipv4first --dns-server=8.8.8.8 index.js\n\
-fi' > /app/start.sh && \
+# Set Node.js DNS options\n\
+export NODE_OPTIONS="--dns-result-order=ipv4first"\n\
+\n\
+# WhatsApp server IPs\n\
+WHATSAPP_IPS=(\n\
+    "157.240.22.54"\n\
+    "157.240.196.35"\n\
+    "157.240.3.54"\n\
+    "157.240.192.35"\n\
+    "157.240.7.54"\n\
+    "157.240.14.54"\n\
+)\n\
+\n\
+# Test connectivity\n\
+for ip in "${WHATSAPP_IPS[@]}"; do\n\
+    if ping -c 1 -W 2 $ip >/dev/null 2>&1; then\n\
+        echo "Connected to WhatsApp server: $ip"\n\
+        export WHATSAPP_IP=$ip\n\
+        break\n\
+    fi\n\
+done\n\
+\n\
+# Fallback if no IP is reachable\n\
+if [ -z "$WHATSAPP_IP" ]; then\n\
+    echo "Warning: No WhatsApp servers reachable, using default"\n\
+    export WHATSAPP_IP="157.240.22.54"\n\
+fi\n\
+\n\
+# Verify sharp before starting\n\
+if ! node -e "require('\''sharp'\'')"; then\n\
+    echo "Sharp not working, attempting fix..."\n\
+    npm rebuild sharp\n\
+fi\n\
+\n\
+# Start the application\n\
+echo "Starting bot with DNS configuration..."\n\
+node --dns-result-order=ipv4first index.js\n\
+' > /app/start.sh && \
     chmod +x /app/start.sh
 
 # Start command

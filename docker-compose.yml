@@ -4,5 +4,12 @@ services:
     build: .
     environment:
       - SESSION_ID=${SESSION_ID}
+      - NODE_DNS_SERVERS=8.8.8.8,1.1.1.1
     volumes:
-      - ./sessions:/app/sessions
+      - ./sessions:/app/session
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    restart: always
+    ports:
+      - "7860:7860"
