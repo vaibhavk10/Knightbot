@@ -1,105 +1,40 @@
+# Use Node.js 18 slim image
 FROM node:18-slim
-
-# Install required dependencies
-RUN apt-get update && \
-    apt-get install -y \
-    ffmpeg \
-    webp \
-    git \
-    dnsutils \
-    ca-certificates \
-    iputils-ping \
-    net-tools \
-    build-essential \
-    python3 \
-    libvips \
-    libvips-dev \
-    libglib2.0-0 \
-    libglib2.0-dev \
-    gcc \
-    g++ \
-    make \
-    pkg-config \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Create necessary directories
-RUN mkdir -p /app/dns /app/session /app/temp /app/database
+# Install required dependencies including DNS tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    git \
+    python3 \
+    make \
+    g++ \
+    dnsutils \
+    iputils-ping \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Clone the repository
-RUN rm -rf * && \
-    git clone https://github.com/vaibhavk10/knightbot.git . || \
-    (echo "Failed to clone repository, retrying..." && \
-    rm -rf * && \
-    git clone https://github.com/vaibhavk10/knightbot.git .)
+# Set Google and Cloudflare DNS servers to fix resolution issues
+RUN echo "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf
 
-# Fix permissions and setup npm
-RUN mkdir -p /root/.npm && \
-    chmod -R 777 /root/.npm && \
-    npm config set unsafe-perm true && \
-    npm config set user 0
+# Copy package files
+COPY package*.json ./
 
-# Install dependencies first
-RUN npm install --no-package-lock --force
+# Install dependencies with unsafe-perm to avoid permission issues
+RUN npm install --unsafe-perm
 
-# Install and build sharp separately
-RUN npm install --no-package-lock --force sharp@0.32.6 && \
-    cd node_modules/sharp && \
-    npm run install && \
-    cd ../..
+# Copy all project files
+COPY . .
 
-# Set permissions
-RUN chmod -R 777 /app
+# Create session directory with full permissions
+RUN mkdir -p session && chmod -R 777 session
 
-# Expose port
+# Expose health check port
 EXPOSE 7860
 
-# Set DNS configuration
+# Set environment variables for DNS resolution
 ENV NODE_DNS_SERVERS="8.8.8.8,1.1.1.1"
 
-# Create startup script
-RUN echo '#!/bin/bash\n\
-# Set Node.js DNS options\n\
-export NODE_OPTIONS="--dns-result-order=ipv4first"\n\
-\n\
-# WhatsApp server IPs\n\
-WHATSAPP_IPS=(\n\
-    "157.240.22.54"\n\
-    "157.240.196.35"\n\
-    "157.240.3.54"\n\
-    "157.240.192.35"\n\
-    "157.240.7.54"\n\
-    "157.240.14.54"\n\
-)\n\
-\n\
-# Test connectivity\n\
-for ip in "${WHATSAPP_IPS[@]}"; do\n\
-    if ping -c 1 -W 2 $ip >/dev/null 2>&1; then\n\
-        echo "Connected to WhatsApp server: $ip"\n\
-        export WHATSAPP_IP=$ip\n\
-        break\n\
-    fi\n\
-done\n\
-\n\
-# Fallback if no IP is reachable\n\
-if [ -z "$WHATSAPP_IP" ]; then\n\
-    echo "Warning: No WhatsApp servers reachable, using default"\n\
-    export WHATSAPP_IP="157.240.22.54"\n\
-fi\n\
-\n\
-# Verify sharp before starting\n\
-if ! node -e "require('\''sharp'\'')"; then\n\
-    echo "Sharp not working, attempting fix..."\n\
-    npm rebuild sharp\n\
-fi\n\
-\n\
-# Start the application\n\
-echo "Starting bot with DNS configuration..."\n\
-node --dns-result-order=ipv4first index.js\n\
-' > /app/start.sh && \
-    chmod +x /app/start.sh
-
-# Start command
-CMD ["/app/start.sh"] 
+# Start the bot
+CMD ["node", "index.js"]

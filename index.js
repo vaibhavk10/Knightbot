@@ -10,12 +10,6 @@ const {
 } = require('@whiskeysockets/baileys');
 const P = require('pino');
 const fs = require('fs');
-const path = require('path');
-const { handleMessages } = require('./main');
-const { exec } = require('child_process');
-const NodeCache = require('node-cache');
-const EventEmitter = require('events');
-const msgRetryCounterCache = new NodeCache();
 const http = require('http');
 const dns = require('dns');
 const { promisify } = require('util');
@@ -23,19 +17,7 @@ const { promisify } = require('util');
 const lookup = promisify(dns.lookup);
 const resolve4 = promisify(dns.resolve4);
 
-// Increase event listener limit
-EventEmitter.defaultMaxListeners = 2000;
-process.setMaxListeners(2000);
-
-// Global settings
-global.packname = settings.packname;
-global.author = settings.author;
-global.channelLink = "https://whatsapp.com/channel/0029Va90zAnIHphOuO8Msp3A";
-global.ytch = "Mr Unique Hacker";
-
-// Custom logger
-const logger = P({ level: 'silent', enabled: false });
-
+// Logger setup
 const printLog = {
     info: (msg) => console.log(chalk.cyan(`\n[i] ${msg}`)),
     success: (msg) => console.log(chalk.green(`\n[✓] ${msg}`)),
@@ -43,16 +25,17 @@ const printLog = {
     error: (msg) => console.log(chalk.red(`\n[x] ${msg}`))
 };
 
-// Connection state management
+// Connection state
 let connectionState = {
     isConnected: false,
     retryCount: 0,
     sock: null
 };
 
+// Session directory
 const sessionPath = './session';
 
-// Setup DNS
+// Setup DNS with fallback
 async function setupDNS() {
     try {
         dns.setServers(['8.8.8.8', '1.1.1.1']);
@@ -62,9 +45,12 @@ async function setupDNS() {
             return true;
         }
     } catch (error) {
-        printLog.error(`DNS Setup failed: ${error.message}`);
-        return false;
+        printLog.error(`DNS Setup failed: ${error.code}`);
+        printLog.warn(`Using fallback IP for WhatsApp.`);
+        global.WHATSAPP_IP = '157.240.22.54';
+        return true; // Continue even if DNS resolution fails
     }
+    return false;
 }
 
 // Custom DNS Resolver with retries
@@ -83,13 +69,12 @@ const customDNSResolve = async (hostname) => {
         }
     }
     if (hostname === 'web.whatsapp.com') {
-        printLog.warn(`Using fallback IP for ${hostname}`);
         return '157.240.22.54';
     }
     throw new Error(`DNS resolution failed for ${hostname}`);
 };
 
-// WhatsApp Connection Function
+// Start WhatsApp connection
 async function startConnection() {
     try {
         let dnsSetupSuccess = false;
@@ -111,15 +96,12 @@ async function startConnection() {
         const sock = makeWASocket({
             auth: {
                 creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, logger)
+                keys: makeCacheableSignalKeyStore(state.keys)
             },
             printQRInTerminal: true,
-            logger,
+            logger: P({ level: 'silent' }),
             browser: Browsers.ubuntu('Chrome'),
             version,
-            connectTimeoutMs: 60000,
-            retryRequestDelayMs: 5000,
-            msgRetryCounterCache,
             fetchAgent: {
                 lookup: async (hostname, options, callback) => {
                     try {
@@ -135,7 +117,7 @@ async function startConnection() {
         connectionState.sock = sock;
         printLog.success('Connected to WhatsApp successfully!');
 
-        sock.ev.on('connection.update', async (update) => {
+        sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect } = update;
             if (connection === 'close') {
                 printLog.warn('Connection closed, reconnecting...');
@@ -159,9 +141,9 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200);
         res.end(`Bot is running! DNS resolution successful: ${addresses.join(', ')}`);
     } catch (err) {
-        printLog.error('DNS resolution failed during health check:', err);
+        printLog.error('DNS health check failed:', err.message);
         res.writeHead(500);
-        res.end('DNS resolution failed: ' + err.message);
+        res.end('DNS health check failed: ' + err.message);
     }
 });
 
@@ -169,24 +151,5 @@ server.listen(7860, () => {
     printLog.info('Health check server running on port 7860');
 });
 
-// Start the bot
+// Start bot connection
 startConnection();
-
-// Handle graceful shutdown
-process.on('SIGINT', async () => {
-    printLog.warn('Received shutdown signal');
-    if (connectionState.sock) {
-        await connectionState.sock.end();
-    }
-    process.exit(0);
-});
-
-process.on('unhandledRejection', (err) => {
-    printLog.error('Unhandled Rejection:', err);
-    setTimeout(startConnection, 3000);
-});
-
-process.on('uncaughtException', (err) => {
-    printLog.error('Uncaught Exception:', err);
-    setTimeout(startConnection, 3000);
-});
