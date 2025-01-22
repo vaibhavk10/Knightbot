@@ -1,6 +1,10 @@
 {
-  "users": [],
-  "groups": [],
+  "users": [
+    "14703105589@s.whatsapp.net"
+  ],
+  "groups": [
+    "120363023036831570@g.us"
+  ],
   "antilink": {
     "120363026391945437@g.us": {
       "enabled": true,
