@@ -13,6 +13,9 @@ const msgRetryCounterCache = new NodeCache();
 const http = require('http');
 const { isWelcomeOn, isGoodByeOn } = require('./sql');
 const dns = require('dns');
+const { promisify } = require('util');
+const lookup = promisify(dns.lookup);
+const resolve4 = promisify(dns.resolve4);
 
 // Increase event listener limit
 EventEmitter.defaultMaxListeners = 2000;
@@ -76,9 +79,34 @@ const cleanupSession = async (sock, jid) => {
     }
 };
 
+// Add this function before startConnection()
+async function setupDNS() {
+    try {
+        // Try to resolve WhatsApp's domain first
+        const ips = await resolve4('web.whatsapp.com');
+        if (ips && ips.length > 0) {
+            // Add entries to hosts file in memory
+            dns.setServers(['8.8.8.8', '1.1.1.1']); // Use Google and Cloudflare DNS
+            printLog.info('DNS Setup completed successfully');
+            return true;
+        }
+    } catch (error) {
+        printLog.error('DNS Setup failed:', error);
+        return false;
+    }
+}
+
 // Automatic reconnection function
 async function startConnection() {
     try {
+        // Setup DNS before connecting
+        const dnsSetup = await setupDNS();
+        if (!dnsSetup) {
+            printLog.warn('DNS setup failed, retrying in 5 seconds...');
+            setTimeout(startConnection, 5000);
+            return;
+        }
+
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         const { version } = await fetchLatestBaileysVersion();
         
@@ -99,8 +127,29 @@ async function startConnection() {
             },
             printQRInTerminal: true,
             logger,
-            browser: Browsers.windows('Desktop'),
+            browser: Browsers.ubuntu('Chrome'),
             version,
+            connectTimeoutMs: 60_000, // Increase timeout
+            retryRequestDelayMs: 5000,
+            msgRetryCounterCache,
+            // Add these new connection options
+            options: {
+                headers: {
+                    'User-Agent': 'WhatsApp/2.2323.4 Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                },
+                timeout: 60000,
+                agent: null // Let Node handle the connection
+            },
+            // Add custom DNS resolver
+            customDNSResolver: async (hostname) => {
+                try {
+                    const { address } = await lookup(hostname);
+                    return [address];
+                } catch (error) {
+                    printLog.error(`DNS resolution failed for ${hostname}:`, error);
+                    throw error;
+                }
+            },
             fetchAgent: {
                 lookup: async (hostname, options, callback) => {
                     try {
@@ -123,9 +172,6 @@ async function startConnection() {
                     }
                 }
             },
-            connectTimeoutMs: 60000,
-            retryRequestDelayMs: 5000,
-            keepAliveIntervalMs: 10000,
             syncFullHistory: true,
             defaultQueryTimeoutMs: 30000,
             markOnlineOnConnect: false,
@@ -258,73 +304,23 @@ async function startConnection() {
 
         // Connection update event handler
         sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-
-            if (qr) {
-                if (!connectionState.qrDisplayed) {
-                    connectionState.qrDisplayed = true;
-                    printLog.info('Scan QR Code to connect');
-                }
-            }
-
-            if (connection === 'connecting') {
-                printLog.info('Connecting to WhatsApp...');
-            }
-
+            const { connection, lastDisconnect } = update;
+            
             if (connection === 'close') {
                 const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-                
-                // Clean up sessions on connection close
-                if (!shouldReconnect) {
-                    try {
-                        const files = fs.readdirSync(sessionPath);
-                        for (const file of files) {
-                            if (file.startsWith('session-')) {
-                                fs.unlinkSync(path.join(sessionPath, file));
-                            }
-                        }
-                        printLog.info('Cleaned up all sessions');
-                    } catch (err) {
-                        printLog.error('Error cleaning up sessions:', err);
-                    }
-                }
-                
                 printLog.warn(`Connection closed due to ${lastDisconnect?.error?.message}`);
                 
                 if (shouldReconnect) {
-                    printLog.info('Reconnecting...');
+                    // Try DNS setup again before reconnecting
+                    await setupDNS();
                     setTimeout(startConnection, 3000);
-                } else {
-                    printLog.error('Connection closed. You are logged out.');
-                    process.exit(0);
                 }
-            }
-
-            if (connection === 'open') {
+            } else if (connection === 'connecting') {
+                printLog.info('Connecting to WhatsApp...');
+            } else if (connection === 'open') {
+                printLog.success('Connected to WhatsApp');
                 connectionState.isConnected = true;
-                connectionState.qrDisplayed = false;
-                printLog.success('Bot Connected Successfully!');
-                
-                // Generate or use existing session ID
-                if (!connectionState.sessionId) {
-                    connectionState.sessionId = generateSessionId();
-                }
-                
-                printLog.success(`Session ID: ${connectionState.sessionId}`);
-
-                // Send connection message
-                try {
-                    await sock.sendMessage(sock.user.id, {
-                        text: `🤖 *KnightBot Connected*\n\nSession ID: ${connectionState.sessionId}`
-                    });
-                } catch (err) {}
-
-                // Keep connection alive
-                setInterval(async () => {
-                    try {
-                        await sock.sendPresenceUpdate('available');
-                    } catch (err) {}
-                }, 10000);
+                connectionState.retryCount = 0;
             }
         });
 
@@ -391,7 +387,9 @@ async function startConnection() {
     } catch (err) {
         printLog.error('Fatal error:', err);
         if (!connectionState.isClosing) {
-            setTimeout(startConnection, 3000);
+            // Try DNS setup again before reconnecting
+            await setupDNS();
+            setTimeout(startConnection, 5000);
         }
     }
 }
@@ -401,8 +399,15 @@ startConnection();
 
 // Add this near the bottom of the file, before startConnection()
 const server = http.createServer((req, res) => {
-    res.writeHead(200);
-    res.end('Bot is running!');
+    dns.resolve4('web.whatsapp.com', (err, addresses) => {
+        if (err) {
+            res.writeHead(500);
+            res.end('DNS resolution failed');
+        } else {
+            res.writeHead(200);
+            res.end('Bot is running! DNS resolution successful');
+        }
+    });
 });
 
 server.listen(7860, () => {

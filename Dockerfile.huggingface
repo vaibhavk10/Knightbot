@@ -8,14 +8,20 @@ RUN apt-get update && \
     git \
     dnsutils \
     ca-certificates \
+    iputils-ping \
+    net-tools \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Set DNS servers in resolv.conf
+RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf && \
+    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 
 WORKDIR /app
 
 # Clone the repository first
 RUN git clone https://github.com/vaibhavk10/knightbot.git . && \
-    ls -la  # This will show us the contents to verify
+    ls -la
 
 # Now install dependencies after we have the package.json
 RUN if [ -f "package.json" ]; then \
@@ -34,11 +40,18 @@ RUN mkdir -p /app/session && \
     chmod -R 777 /app/database && \
     chmod -R 777 /app
 
+# Add hosts entry
+RUN echo "157.240.22.54 web.whatsapp.com" >> /etc/hosts
+
 # Expose port
 EXPOSE 7860
 
 # Set DNS servers explicitly
 ENV NODE_DNS_SERVERS="8.8.8.8,1.1.1.1"
 
-# Start command
-CMD ["node", "index.js"] 
+# Add healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD ping -c 1 web.whatsapp.com || exit 1
+
+# Start command with DNS check
+CMD ["sh", "-c", "ping -c 1 web.whatsapp.com && node index.js"] 
