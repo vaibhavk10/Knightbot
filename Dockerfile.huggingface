@@ -10,14 +10,16 @@ RUN apt-get update && \
     ca-certificates \
     iputils-ping \
     net-tools \
+    resolvconf \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Set DNS servers in resolv.conf
-RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf && \
-    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-
 WORKDIR /app
+
+# Create a custom resolv.conf in the app directory
+RUN mkdir -p /app/dns && \
+    echo "nameserver 8.8.8.8" > /app/dns/resolv.conf && \
+    echo "nameserver 1.1.1.1" >> /app/dns/resolv.conf
 
 # Clone the repository first
 RUN git clone https://github.com/vaibhavk10/knightbot.git . && \
@@ -40,18 +42,29 @@ RUN mkdir -p /app/session && \
     chmod -R 777 /app/database && \
     chmod -R 777 /app
 
-# Add hosts entry
-RUN echo "157.240.22.54 web.whatsapp.com" >> /etc/hosts
+# Create hosts file in app directory
+RUN echo "157.240.22.54 web.whatsapp.com" > /app/dns/hosts
 
 # Expose port
 EXPOSE 7860
 
-# Set DNS servers explicitly
+# Set DNS servers explicitly as environment variables
 ENV NODE_DNS_SERVERS="8.8.8.8,1.1.1.1"
+ENV RESOLV_CONF="/app/dns/resolv.conf"
+ENV HOSTS_FILE="/app/dns/hosts"
 
-# Add healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD ping -c 1 web.whatsapp.com || exit 1
+# Create a wrapper script for startup
+RUN echo '#!/bin/bash\n\
+export RESOLV_CONF="/app/dns/resolv.conf"\n\
+export NODE_OPTIONS="--dns-result-order=ipv4first --dns-server=8.8.8.8,1.1.1.1"\n\
+if ping -c 1 web.whatsapp.com >/dev/null 2>&1; then\n\
+    echo "DNS check passed"\n\
+    node index.js\n\
+else\n\
+    echo "Using fallback DNS..."\n\
+    node --dns-result-order=ipv4first --dns-server=8.8.8.8 index.js\n\
+fi' > /app/start.sh && \
+    chmod +x /app/start.sh
 
-# Start command with DNS check
-CMD ["sh", "-c", "ping -c 1 web.whatsapp.com && node index.js"] 
+# Start command
+CMD ["/app/start.sh"] 

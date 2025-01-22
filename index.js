@@ -96,6 +96,34 @@ async function setupDNS() {
     }
 }
 
+// Add near the top of the file
+const customDNSResolve = async (hostname) => {
+    try {
+        // Try multiple DNS servers
+        const servers = ['8.8.8.8', '1.1.1.1'];
+        for (const server of servers) {
+            try {
+                dns.setServers([server]);
+                const addresses = await dns.promises.resolve4(hostname);
+                if (addresses && addresses.length > 0) {
+                    return addresses[0];
+                }
+            } catch (e) {
+                console.log(`DNS resolution failed with ${server}, trying next...`);
+            }
+        }
+        
+        // Fallback to hardcoded IP if it's WhatsApp
+        if (hostname === 'web.whatsapp.com') {
+            return '157.240.22.54';
+        }
+        throw new Error('DNS resolution failed');
+    } catch (error) {
+        console.error(`DNS resolution failed for ${hostname}:`, error);
+        throw error;
+    }
+};
+
 // Automatic reconnection function
 async function startConnection() {
     try {
@@ -153,22 +181,10 @@ async function startConnection() {
             fetchAgent: {
                 lookup: async (hostname, options, callback) => {
                     try {
-                        const addresses = await dns.promises.resolve4(hostname);
-                        if (addresses && addresses.length > 0) {
-                            callback(null, addresses[0], 4);
-                        } else {
-                            if (hostname === 'web.whatsapp.com') {
-                                callback(null, '157.240.196.35', 4);
-                            } else {
-                                callback(new Error('DNS resolution failed'), null);
-                            }
-                        }
+                        const address = await customDNSResolve(hostname);
+                        callback(null, address, 4);
                     } catch (err) {
-                        if (hostname === 'web.whatsapp.com') {
-                            callback(null, '157.240.196.35', 4);
-                        } else {
-                            callback(err, null);
-                        }
+                        callback(err, null);
                     }
                 }
             },
